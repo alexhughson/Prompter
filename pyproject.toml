@@ -1,0 +1,60 @@
+[build-system]
+requires = ["setuptools>=45", "wheel", "setuptools_scm>=6.2"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "prompter"
+description = "A Python library for structured LLM prompting with multiple provider support"
+readme = "README.md"
+authors = [
+    {name = "Alex"}
+]
+requires-python = ">=3.8"
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+]
+dynamic = ["version"]
+dependencies = [
+    "dataclasses; python_version < '3.7'",
+    "typing-extensions; python_version < '3.8'",
+    "pydantic>=2.0.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/alexhughson/Prompter"
+
+[project.optional-dependencies]
+openai = ["openai>=1.0.0"]
+anthropic = ["anthropic>=0.5.0"]
+gemini = ["google-generativeai>=0.3.0"]
+dev = [
+    "pytest>=7.0",
+    "black",
+    "isort",
+    "mypy",
+    "flake8",
+]
+
+[tool.setuptools]
+packages = ["prompter"]
+
+[tool.setuptools_scm]
+write_to = "prompter/_version.py"
+
+[tool.black]
+line-length = 88
+
+[tool.isort]
+profile = "black"
+multi_line_output = 3
+
+[tool.flake8]
+max-line-length = 88
+extend-ignore = ["E203"]
