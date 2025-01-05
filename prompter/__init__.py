@@ -5,6 +5,9 @@ Prompter - A Python library for structured LLM prompting with multiple provider 
 from .schemas import *
 
 from .base_executor import *
+from .anthropic_executor import *
+from .gemini_executor import *
+from .openai_executor import *
 
 try:
     from ._version import version as __version__

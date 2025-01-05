@@ -7,37 +7,55 @@ Prompter is a small class based python representation of LLM Prompts, and some a
 ## Usage
 
 ```python
-from prompter import Prompt, UserMessage, OpenAIAdapter
+from prompter import Prompt, UserMessage, OpenAIExecutor
 
 prompt = Prompt(
-    system_prompt="You are a helpful assistant. You are given a question and you need to answer it.",
-    messages=[UserMessage(content="How's it going?")],
+    system_message="You are a helpful assistant",
+    messages=[
+        UserMessage(content="What is this?"),
+        ImageMessage(
+            url=URL_OF_CLOUD_PICTURE,
+        ),
+    ],
 )
+executor = OpenAIExecutor()
 
-adapter = OpenAIAdapter()
+response = executor.execute(prompt)
+response.raise_for_status()
 
-response = adapter.execute(prompt)
-
-for message in response.messages:
-    print(str(message))
+print("Cloud test response: " + response.text())
+assert "cloud" in response.text().lower()
 ```
 
-## Sending Images
+## Tool Usage
 
 ```python
-from prompter import Prompt, ImageMessage, OpenAIAdapter
-
 prompt = Prompt(
-    system_prompt="You are an image classifier.  Sorry about that",
-    messages=[ImageMessage(image_path="image.png")],
+    system_message="You are a helpful assistant",
+    messages=[
+        UserMessage(
+            content="Please use the get_weather tool to get the weather in toronto"
+        ),
+    ],
+    tools=[
+        Tool(
+            name="get_weather",
+            description="Get the weather in a given location",
+            argument_schema=WeatherArgs,
+        )
+    ],
+    tool_use=Prompt.TOOL_USE_REQUIRED,
 )
+executor = AnthropicExecutor()
+response = executor.execute(prompt)
+response.raise_for_status()
+tool_call = response.tool_call()
 
-adapter = OpenAIAdapter()
+print("Tool call: " + str(tool_call.arguments))
 
-response = adapter.execute(prompt)
-
-for message in response.messages:
-    print(str(message))
+assert tool_call.name == "get_weather"
+assert isinstance(tool_call.arguments, WeatherArgs)
+assert tool_call.arguments.location.lower() == "toronto"
 ```
 
 ## Build your own Adapters
