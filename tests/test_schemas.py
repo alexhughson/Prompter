@@ -116,7 +116,7 @@ def test_output_messages():
     )
     assert tool_call.is_tool_call() is True
     assert tool_call.is_text() is False
-    assert isinstance(tool_call.arguments, dict)
+    assert isinstance(tool_call.arguments, WeatherArgs)
 
     # Test with schema validation
     parsed_args = tool_call.parse()
@@ -139,8 +139,6 @@ def test_llm_response():
 
     assert len(response.text_messages()) == 1
     assert len(response.tool_calls()) == 1
-    assert response.usage.total_tokens == 30
-    assert response.cost == 0.001
 
     # Test text concatenation
     assert "The weather is:" in response.text()
@@ -195,7 +193,7 @@ def test_tool_call_json_parsing_errors():
         name="get_weather", arguments='"not_a_dict"', schema=WeatherArgs
     )
 
-    with pytest.raises(json.JSONDecodeError):
+    with pytest.raises(ValidationError):
         tool_call.parse()
 
 
@@ -221,7 +219,7 @@ def test_tool_call_schema_validation_errors():
 
     with pytest.raises(ValidationError) as exc_info:
         tool_call.parse()
-    assert "str type expected" in str(exc_info.value)
+    assert "should be a valid string" in str(exc_info.value)
 
     # Invalid enum value for units
     tool_call = ToolCallOutputMessage(

@@ -199,9 +199,9 @@ class ToolCallOutputMessage(OutputMessage):
         """Parse the arguments into the appropriate type"""
         # First ensure we have a dict
         args_dict = (
-            self.arguments
-            if isinstance(self.arguments, dict)
-            else json.loads(self.arguments)
+            self._arguments
+            if isinstance(self._arguments, dict)
+            else json.loads(self._arguments)
         )
 
         # If we have a schema, parse into the model
@@ -210,7 +210,7 @@ class ToolCallOutputMessage(OutputMessage):
         return args_dict
 
     def text(self) -> str:
-        parsed_args = self.arguments.parse()
+        parsed_args = self.parse()
         if isinstance(parsed_args, BaseModel):
             args_str = parsed_args.model_dump_json()
         else:

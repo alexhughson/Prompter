@@ -178,7 +178,7 @@ class AnthropicExecutor(BaseLLMExecutor):
         for content in response.content:
 
             if content.type == "text":
-                messages.append(TextOutputMessage(type="text", content=content.text))
+                messages.append(TextOutputMessage(content=content.text))
             elif content.type == "tool_use":
                 schema = tool_schemas.get(content.name, None)
 

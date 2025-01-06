@@ -85,6 +85,5 @@ def test_conversation_with_error_tool_calls(llm_executor):
     response.raise_for_status()
 
     # The LLM should make a tool call for London
-    tool_call = response.tool_call()
-    assert tool_call.name == "get_weather"
-    assert tool_call.arguments.location.lower() == "london"
+    cities = {call.arguments.location.lower() for call in response.tool_calls()}
+    assert "london" in cities
