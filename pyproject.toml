@@ -41,6 +41,12 @@ dev = [
     "mypy",
     "flake8",
 ]
+all = [
+    "prompter[openai]",
+    "prompter[anthropic]",
+    "prompter[gemini]",
+    "prompter[dev]",
+]
 
 [tool.setuptools]
 packages = ["prompter"]

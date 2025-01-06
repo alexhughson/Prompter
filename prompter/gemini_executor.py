@@ -1,5 +1,5 @@
 import google.generativeai as genai
-from schemas import Prompt, OutputMessage
+from .schemas import Prompt, OutputMessage
 from copy import deepcopy
 from typing_extensions import TypeAlias
 from typing import Any

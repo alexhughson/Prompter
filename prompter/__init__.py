@@ -6,7 +6,7 @@ from .schemas import *
 
 from .base_executor import *
 from .anthropic_executor import *
-from .gemini_executor import *
+
 from .openai_executor import *
 
 try:

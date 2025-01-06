@@ -8,9 +8,6 @@ from pydantic import BaseModel
 class Message(BaseModel):
     """Base class for all message types"""
 
-    role: str
-    content: str
-
     @abstractmethod
     def message_type(self) -> str:
         pass
@@ -73,28 +70,6 @@ class Tool(BaseModel):
         ):
             return self.argument_schema.model_json_schema()
         return self.argument_schema
-
-
-class ToolPool(BaseModel):
-    """Collection of available tools"""
-
-    tools: List[Tool] = field(default_factory=list)
-
-    @property
-    def tool_definitions(self) -> List[Dict]:
-        """Return the tools in a format suitable for LLM API consumption"""
-        return [
-            {
-                "name": tool.name,
-                "description": tool.description,
-                "parameters": tool.get_schema(),
-            }
-            for tool in self.tools
-        ]
-
-    def get_tool(self, name: str) -> Optional[Tool]:
-        """Get a tool by name"""
-        return next((tool for tool in self.tools if tool.name == name), None)
 
 
 class Prompt:
@@ -241,3 +216,36 @@ class LLMResponse:
 
     def raise_for_status(self):
         pass
+
+
+@dataclass
+class ToolCallResult:
+    """Represents the result of a tool call"""
+
+    result: Any
+    error: Optional[str] = None
+
+
+class ToolCallMessage(Message):
+    """A tool call that has been completed with its result"""
+
+    tool_name: str
+    tool_call_id: Optional[str] = None
+    arguments: Optional[Dict]
+    result: ToolCallResult
+    role: str = "assistant"
+
+    def message_type(self) -> str:
+        return "tool_call"
+
+
+# @dataclass
+# class PendingToolCall(Message):
+#     """A tool call that has been requested but not yet completed"""
+
+#     tool_name: str
+#     arguments: Dict
+#     role: str = "assistant"
+
+#     def message_type(self) -> str:
+#         return "pending_tool_call"

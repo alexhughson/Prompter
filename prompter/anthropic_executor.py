@@ -1,3 +1,5 @@
+import uuid
+
 from typing import Dict, List
 import anthropic
 import json
@@ -5,10 +7,12 @@ from .image_data import url_to_b64
 from .base_executor import BaseLLMExecutor
 from .schemas import (
     Prompt,
+    ImageMessage,
+    ToolCallMessage,
     LLMResponse,
+    Tool,
     TextOutputMessage,
     ToolCallOutputMessage,
-    OutputMessage,
     UsageInfo,
     ModelPricing,
     ToolCallArguments,
@@ -41,9 +45,8 @@ class AnthropicExecutor(BaseLLMExecutor):
         }
         return prices.get(self.model, ModelPricing(input_price=0.0, output_price=0.0))
 
-    def execute(self, prompt: Prompt) -> LLMResponse:
-
-        self.prompt = prompt
+    def get_api_params(self, prompt: Prompt) -> Dict:
+        """Get the API parameters for the prompt"""
         """Execute the prompt using Anthropic's API"""
         messages = self._convert_prompt_to_api_messages(prompt)
 
@@ -61,11 +64,15 @@ class AnthropicExecutor(BaseLLMExecutor):
         if prompt.tools:
             params["tools"] = self._convert_tools_to_api_format(prompt.tools)
 
+        return params
+
+    def execute(self, prompt: Prompt) -> LLMResponse:
+        params = self.get_api_params(prompt)
         # Make the API call
         response = self.client.messages.create(**params)
 
         # Convert and return the response
-        return self._convert_api_response_to_messages(response)
+        return self._convert_api_response_to_messages(prompt, response)
 
     def _calculate_cost(self, usage: UsageInfo) -> float:
         """Calculate the cost based on Anthropic's pricing"""
@@ -80,38 +87,44 @@ class AnthropicExecutor(BaseLLMExecutor):
         # Add conversation messages
         for msg in prompt.messages:
             if msg.message_type() == "image":
-                # Handle image messages (Anthropic's format)
-                content = []
-                if msg.content:
-                    content.append({"type": "text", "text": msg.content})
-
-                image_data = url_to_b64(msg.url)
-                content.append(
-                    {
-                        "type": "image",
-                        "source": {
-                            "type": "base64",
-                            "data": image_data.base64_data,
-                            "media_type": image_data.content_type,
-                        },
-                    }
-                )
-                messages.append(
-                    {
-                        "role": "user",
-                        "content": content,
-                    }
-                )
-            else:
+                messages.append(self._convert_imagemessage_to_api_format(msg))
+            elif msg.message_type() == "text":
                 # Map our roles to Anthropic's roles
                 role = "assistant" if msg.role == "assistant" else "user"
                 messages.append(
                     {"role": role, "content": [{"type": "text", "text": msg.content}]}
                 )
+            elif msg.message_type() == "tool_call":
+                messages.extend(self._convert_tool_call_to_api_format(msg))
+            else:
+                raise ValueError(f"Unsupported message type: {msg.message_type()}")
 
         return messages
 
-    def _convert_tools_to_api_format(self, tools: List) -> List[Dict]:
+    def _convert_imagemessage_to_api_format(self, msg: ImageMessage) -> Dict:
+        """Convert an image message to Anthropic's expected format"""
+        content = []
+        if msg.content:
+            content.append({"type": "text", "text": msg.content})
+
+        image_data = url_to_b64(msg.url)
+        content.append(
+            {
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "data": image_data.base64_data,
+                    "media_type": image_data.content_type,
+                },
+            }
+        )
+
+        return {
+            "role": "user",
+            "content": content,
+        }
+
+    def _convert_tools_to_api_format(self, tools: List[Tool]) -> List[Dict]:
         """Convert our tool format to Anthropic's expected format"""
         return [
             {
@@ -122,10 +135,44 @@ class AnthropicExecutor(BaseLLMExecutor):
             for tool in tools
         ]
 
-    def _convert_api_response_to_messages(self, response) -> LLMResponse:
+    def _convert_tool_call_to_api_format(self, msg: ToolCallMessage) -> Dict:
+        """Convert a tool call message to Anthropic's expected format"""
+        ret = []
+        tool_call_id = msg.tool_call_id or "tooluse_" + str(uuid.uuid4())
+        ret.append(
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "name": msg.tool_name,
+                        "id": tool_call_id,
+                        "input": msg.arguments,
+                    }
+                ],
+            }
+        )
+
+        ret.append(
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": tool_call_id,
+                        "content": (json.dumps(msg.result.result)),
+                    }
+                ],
+            },
+        )
+        return ret
+
+    def _convert_api_response_to_messages(
+        self, prompt: Prompt, response
+    ) -> LLMResponse:
         """Convert Anthropic's response format to our internal format"""
         messages = []
-        tool_schemas = {tool.name: tool.argument_schema for tool in self.prompt.tools}
+        tool_schemas = {tool.name: tool.argument_schema for tool in prompt.tools}
 
         # Handle each content block
         for content in response.content:
