@@ -1,21 +1,21 @@
-import os
-from typing import Dict, List
-from openai import OpenAI
-import uuid
 import json
+import os
+import uuid
+from typing import Dict, List
+
+from openai import OpenAI
 
 from .base_executor import BaseLLMExecutor
 from .schemas import (
-    Prompt,
-    Tool,
-    LLMResponse,
-    TextOutputMessage,
-    ToolCallOutputMessage,
     ImageMessage,
-    ToolCallMessage,
-    UsageInfo,
+    LLMResponse,
     ModelPricing,
-    ToolCallArguments,
+    Prompt,
+    TextOutputMessage,
+    Tool,
+    ToolCallMessage,
+    ToolCallOutputMessage,
+    UsageInfo,
 )
 
 
@@ -45,14 +45,9 @@ class OpenAIExecutor(BaseLLMExecutor):
     def get_api_params(self, prompt: Prompt) -> Dict:
         """Get the API parameters for the prompt"""
         messages = self._convert_prompt_to_api_messages(prompt)
-        # Store prompt for use in response parsing
 
-        messages = self._convert_prompt_to_api_messages(prompt)
-
-        # Prepare the API call parameters
         params = {"model": self.model, "messages": messages, **self.kwargs}
 
-        # Add tools if they exist
         if prompt.tools:
             params["tools"] = self._convert_tools_to_api_format(prompt.tools)
             params["tool_choice"] = "auto"
@@ -64,7 +59,6 @@ class OpenAIExecutor(BaseLLMExecutor):
         params = self.get_api_params(prompt)
         response = self.client.chat.completions.create(**params)
 
-        # Convert and return the response
         return self._convert_api_response_to_messages(prompt, response)
 
     def _calculate_cost(self, usage: UsageInfo) -> float:
@@ -154,23 +148,18 @@ class OpenAIExecutor(BaseLLMExecutor):
 
             # Handle regular text responses
             if message.content:
-                messages.append(TextOutputMessage(type="text", content=message.content))
+                messages.append(TextOutputMessage(content=message.content))
 
             # Handle tool calls
             if message.tool_calls:
                 for tool_call in message.tool_calls:
-                    tool_args = ToolCallArguments(
-                        name=tool_call.function.name,
-                        arguments=tool_call.function.arguments,
-                    )
-                    # Set the schema if we have one
-                    if schema := tool_schemas.get(tool_call.function.name):
-                        tool_args.set_schema(schema)
+                    schema = tool_schemas.get(tool_call.function.name, None)
 
                     messages.append(
                         ToolCallOutputMessage(
                             name=tool_call.function.name,
-                            arguments=tool_args,
+                            arguments=tool_call.function.arguments,
+                            schema=schema,
                         )
                     )
 

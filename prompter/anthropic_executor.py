@@ -1,21 +1,21 @@
-import uuid
-
-from typing import Dict, List
-import anthropic
 import json
-from .image_data import url_to_b64
+import uuid
+from typing import Dict, List
+
+import anthropic
+
 from .base_executor import BaseLLMExecutor
+from .image_data import url_to_b64
 from .schemas import (
-    Prompt,
     ImageMessage,
-    ToolCallMessage,
     LLMResponse,
-    Tool,
+    ModelPricing,
+    Prompt,
     TextOutputMessage,
+    Tool,
+    ToolCallMessage,
     ToolCallOutputMessage,
     UsageInfo,
-    ModelPricing,
-    ToolCallArguments,
 )
 
 
@@ -180,16 +180,11 @@ class AnthropicExecutor(BaseLLMExecutor):
             if content.type == "text":
                 messages.append(TextOutputMessage(type="text", content=content.text))
             elif content.type == "tool_use":
-
-                tool_args = ToolCallArguments(arguments=content.input)
-                # Set the schema if we have one
-                if schema := tool_schemas.get(content.name):
-                    tool_args.set_schema(schema)
+                schema = tool_schemas.get(content.name, None)
 
                 messages.append(
                     ToolCallOutputMessage(
-                        name=content.name,
-                        arguments=tool_args,
+                        name=content.name, arguments=content.input, schema=schema
                     )
                 )
 

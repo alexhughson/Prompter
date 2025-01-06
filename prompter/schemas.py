@@ -1,10 +1,16 @@
-from dataclasses import dataclass, field
-from typing import List, Dict, Optional, Literal, Type, Union, Any
-from abc import ABC, abstractmethod
 import json
+from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Literal, Optional, Type, Union
+
 from pydantic import BaseModel
 
+"""
+Inputs
+"""
 
+
+### Messages
 class Message(BaseModel):
     """Base class for all message types"""
 
@@ -39,21 +45,28 @@ class ImageMessage(Message):
         return "image"
 
 
-class ModelPricing(BaseModel):
-    """Pricing information for a specific model"""
+@dataclass
+class ToolCallResult:
+    """Represents the result of a tool call when providing it in the chat transcript"""
 
-    input_price: float  # Cost per 1K input tokens
-    output_price: float  # Cost per 1K output tokens
-
-
-class UsageInfo(BaseModel):
-    """Token usage information from an API call"""
-
-    input_tokens: int = 0
-    output_tokens: int = 0
-    total_tokens: int = 0
+    result: Any
+    error: Optional[str] = None
 
 
+class ToolCallMessage(Message):
+    """A tool call that has been completed with its result"""
+
+    tool_name: str
+    tool_call_id: Optional[str] = None
+    arguments: Optional[Dict]
+    result: ToolCallResult
+    role: str = "assistant"
+
+    def message_type(self) -> str:
+        return "tool_call"
+
+
+### Prompt Options
 class Tool(BaseModel):
     """Represents a tool that can be called by the LLM"""
 
@@ -92,8 +105,19 @@ class Prompt:
         self.tools = tools or []
 
 
-class OutputMessage(BaseModel):
-    """Base class for all types of LLM outputs"""
+"""
+Outputs
+"""
+
+
+class OutputMessage:
+    """
+    Base class for all types of LLM output messages.
+
+    All message types must implement:
+    - text(): Returns a string representation of the message
+    - is_tool_call(): Returns whether this message represents a tool call
+    """
 
     type: str
 
@@ -101,34 +125,77 @@ class OutputMessage(BaseModel):
     def text(self) -> str:
         pass
 
+    @abstractmethod
+    def is_tool_call(self) -> bool:
+        pass
+
+    @abstractmethod
+    def is_text(self) -> bool:
+        return not self.is_tool_call()
+
+    @abstractmethod
+    def raise_on_parse_error(self) -> None:
+        pass
+
 
 class TextOutputMessage(OutputMessage):
     content: str
     type: str = "text"
 
+    def __init__(self, content: str):
+        self.content = content
+
     def text(self) -> str:
         return self.content
 
+    def is_tool_call(self) -> bool:
+        return False
 
-class ImageOutputMessage(OutputMessage):
-    image_url: str
-    type: str = "image"
+    def raise_on_parse_error(self) -> None:
+        pass
 
-    def text(self) -> str:
-        return f"Image: {self.image_url}"
+    def is_text(self) -> bool:
+        return True
 
 
-class ToolCallArguments(BaseModel):
-    """Arguments for a tool call"""
+# TODO
+# class ImageOutputMessage(OutputMessage):
+#     image_url: str
+#     type: str = "image"
 
-    arguments: Union[Dict, str]  # Can be either a Dict or JSON string
+#     def text(self) -> str:
+#         return f"Image: {self.image_url}"
+
+
+class ToolCallOutputMessage(OutputMessage):
+    """
+    Represents a tool call requested by the LLM.
+
+    Attributes:
+        name (str): Name of the tool to be called
+        type (str): Always "tool_call"
+
+    Methods:
+        set_schema(schema): Set the Pydantic model for argument validation
+        is_valid(): Check if arguments match the provided schema
+        parsed_arguments(): Get validated arguments as a Pydantic model
+        raw_arguments(): Get unvalidated arguments as a dict
+    """
+
+    name: str
+    _arguments: Any
     _schema: Optional[Type[BaseModel]] = None
 
-    def set_schema(self, schema: Type[BaseModel]) -> None:
-        """Set the Pydantic model schema for parsing"""
+    def __init__(self, name: str, arguments, schema=None):
+        self.name = name
+        self._arguments = arguments
         self._schema = schema
 
-    def parse(self) -> Union[BaseModel, Dict]:
+    @property
+    def arguments(self) -> Union[BaseModel, Dict, str]:
+        return self.parse()
+
+    def parse(self) -> Union[BaseModel, Dict, str]:
         """Parse the arguments into the appropriate type"""
         # First ensure we have a dict
         args_dict = (
@@ -142,22 +209,6 @@ class ToolCallArguments(BaseModel):
             return self._schema.model_validate(args_dict)
         return args_dict
 
-
-class ToolCallOutputMessage:
-    name: str
-    _arguments: ToolCallArguments
-
-    def __init__(self, name: str, arguments: ToolCallArguments):
-        self.name = name
-        self._arguments = arguments
-
-    def set_schema(self, schema: Type[BaseModel]) -> None:
-        self._arguments.set_schema(schema)
-
-    @property
-    def arguments(self) -> ToolCallArguments:
-        return self._arguments.parse()
-
     def text(self) -> str:
         parsed_args = self.arguments.parse()
         if isinstance(parsed_args, BaseModel):
@@ -166,9 +217,89 @@ class ToolCallOutputMessage:
             args_str = json.dumps(parsed_args)
         return f"Tool {self.name} called with arguments {args_str}"
 
+    def is_tool_call(self) -> bool:
+        return True
+
+    def raise_on_parse_error(self) -> None:
+        pass
+
+    def parsing_failed(self) -> bool:
+        return False
+
+    def is_text(self) -> bool:
+        return False
+
+
+class ModelPricing(BaseModel):
+    """Pricing information for a specific model"""
+
+    input_price: float  # Cost per 1K input tokens
+    output_price: float  # Cost per 1K output tokens
+
+
+class UsageInfo(BaseModel):
+    """Token usage information from an API call"""
+
+    input_tokens: int = 0
+    output_tokens: int = 0
+    total_tokens: int = 0
+
 
 class LLMResponse:
-    """Complete response from an LLM, including all outputs and usage information"""
+    """
+    Complete response from an LLM, including all outputs and usage information.
+
+    Attributes:
+        messages (List[OutputMessage]): All messages in the response
+        usage (UsageInfo): Token usage information
+        cost (float): Cost of the API call
+
+    Methods:
+        parsed_result() -> T:
+            Parse the entire response according to the provided schema.
+            Raises ValidationError if parsing fails.
+
+        text(include_tool_calls: bool = True) -> str:
+            Get all text content concatenated.
+            Optional parameter to include/exclude tool call descriptions.
+
+        tool_calls(strict: bool = True) -> List[ToolCallOutputMessage]:
+            Get all tool calls.
+            If strict=True, only returns calls with valid arguments.
+
+        single_tool_call() -> ToolCallOutputMessage:
+            Get exactly one tool call.
+            Raises ValueError if there isn't exactly one.
+
+        messages_iter() -> Iterator[OutputMessage]:
+            Iterate through all messages in order.
+
+        tool_calls_iter(strict: bool = True) -> Iterator[ToolCallOutputMessage]:
+            Iterate through tool calls in order.
+            If strict=True, only yields calls with valid arguments.
+
+    Properties:
+        result_type: The type of response (TEXT_ONLY, TOOL_CALLS, or MIXED)
+        has_tool_calls: Whether the response contains any tool calls
+
+    Example:
+        ```python
+        response = executor.execute[WeatherResponse](prompt)
+
+        # Get structured data
+        if response.result_type == ResultType.TEXT_ONLY:
+            weather = response.parsed_result()
+            print(f"Temperature: {weather.temperature}")
+
+        # Process tool calls
+        for tool_call in response.tool_calls_iter():
+            try:
+                args = tool_call.parsed_arguments()
+                result = weather_service.get_weather(**args.dict())
+            except ValidationError:
+                print(f"Invalid args for {tool_call.name}")
+        ```
+    """
 
     messages: List[OutputMessage]
     usage: UsageInfo
@@ -177,9 +308,13 @@ class LLMResponse:
     def __init__(
         self, messages: List[OutputMessage], usage: UsageInfo, cost: float = 0.0
     ):
-        self.messages = messages
+        self._messages = messages
         self.usage = usage
         self.cost = cost
+
+    @property
+    def messages(self) -> List[OutputMessage]:
+        return self._messages
 
     def tool_call(self) -> Optional[ToolCallOutputMessage]:
         all_tool_calls = self.tool_calls()
@@ -197,14 +332,7 @@ class LLMResponse:
             if isinstance(message, ToolCallOutputMessage)
         ]
 
-    def only_tool_calls(self) -> List[ToolCallOutputMessage]:
-        return [
-            message
-            for message in self.messages
-            if isinstance(message, ToolCallOutputMessage)
-        ]
-
-    def only_text(self) -> List[TextOutputMessage]:
+    def text_messages(self) -> List[TextOutputMessage]:
         return [
             message
             for message in self.messages
@@ -218,27 +346,6 @@ class LLMResponse:
         pass
 
 
-@dataclass
-class ToolCallResult:
-    """Represents the result of a tool call"""
-
-    result: Any
-    error: Optional[str] = None
-
-
-class ToolCallMessage(Message):
-    """A tool call that has been completed with its result"""
-
-    tool_name: str
-    tool_call_id: Optional[str] = None
-    arguments: Optional[Dict]
-    result: ToolCallResult
-    role: str = "assistant"
-
-    def message_type(self) -> str:
-        return "tool_call"
-
-
 # @dataclass
 # class PendingToolCall(Message):
 #     """A tool call that has been requested but not yet completed"""
@@ -246,6 +353,7 @@ class ToolCallMessage(Message):
 #     tool_name: str
 #     arguments: Dict
 #     role: str = "assistant"
+
 
 #     def message_type(self) -> str:
 #         return "pending_tool_call"
