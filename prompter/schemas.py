@@ -115,7 +115,7 @@ class ToolCallMessage(Message):
 
     tool_name: str
     tool_call_id: Optional[str] = None
-    arguments: Optional[Dict]
+    arguments: Optional[Union[Dict, str]]
     result: ToolCallResult
     role: str = "assistant"
 
@@ -291,10 +291,15 @@ class ToolCallOutputMessage(OutputMessage):
     _arguments: Any
     _schema: Optional[Type[BaseModel]] = None
 
-    def __init__(self, name: str, arguments, schema=None):
+    def __init__(self, name: str, arguments: str, schema=None):
         self.name = name
         self._arguments = arguments
         self._schema = schema
+
+    def to_input_message(self, result: str) -> ToolCallMessage:
+        return ToolCallMessage(
+            name=self.name, arguments=self._arguments, tool_call_id=uuid.uuid()
+        )
 
     @property
     def arguments(self) -> Union[BaseModel, Dict, str]:
@@ -327,6 +332,9 @@ class ToolCallOutputMessage(OutputMessage):
 
     def raise_on_parse_error(self) -> None:
         pass
+
+    def raw_arguments(self):
+        return self._arguments
 
     def parsing_failed(self) -> bool:
         return False
