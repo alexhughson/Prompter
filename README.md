@@ -64,3 +64,7 @@ Ultimately the point of this is that you can quickly build your own adapters for
 
 Just take in a Prompt object and return a LLMResponse object.
 
+## Documentation
+
+Full documentation is available at: https://alexhughson.github.io/Prompter/
+

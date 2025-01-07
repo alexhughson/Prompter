@@ -65,3 +65,8 @@ clean:
     rm -rf __pycache__
     rm -rf .pytest_cache
     rm -rf .mypy_cache
+    rm -rf docs/_build
+
+# Build sphinx docs
+docs:
+    cd docs && make html

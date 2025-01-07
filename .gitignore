@@ -38,3 +38,6 @@ Thumbs.db
 
 # Version file
 prompter/_version.py
+
+# Sphinx documentation
+docs/_build/

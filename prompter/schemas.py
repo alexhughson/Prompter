@@ -1,3 +1,10 @@
+"""
+Core schema definitions for the Prompter library.
+
+This module contains all the data structures used to represent prompts,
+messages, and responses in a provider-agnostic way.
+"""
+
 import json
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -12,14 +19,31 @@ Inputs
 
 ### Messages
 class Message(BaseModel):
-    """Base class for all message types"""
+    """Base class for all message types in a conversation.
+
+    All message types must implement message_type() to identify their type.
+    This allows executors to properly handle different kinds of messages
+    (text, images, tool calls, etc).
+    """
 
     @abstractmethod
     def message_type(self) -> str:
+        """Get the type identifier for this message.
+
+        Returns:
+            str: The message type identifier (e.g., "text", "image", "tool_call")
+        """
         pass
 
 
 class UserMessage(Message):
+    """A text message from the user to the LLM.
+
+    Attributes:
+        content: The text content of the message
+        role: Always "user" for user messages
+    """
+
     content: str
     role: str = "user"
 
@@ -28,6 +52,13 @@ class UserMessage(Message):
 
 
 class AssistantMessage(Message):
+    """A text response from the LLM.
+
+    Attributes:
+        content: The text content of the message
+        role: Always "assistant" for LLM responses
+    """
+
     content: str
     role: str = "assistant"
 
@@ -36,10 +67,19 @@ class AssistantMessage(Message):
 
 
 class ImageMessage(Message):
+    """An image with optional caption to be shown to the LLM.
+
+    Attributes:
+        url: URL of the image to be processed
+        content: Optional caption or description of the image
+        role: Always "user" as only users can send images
+        media_type: MIME type of the image, defaults to JPEG
+    """
+
     role: str = "user"
     content: Optional[str] = None
-    url: str  # URL is required for image messages
-    media_type: Optional[str] = "image/jpeg"  # Default to JPEG but can be overridden
+    url: str
+    media_type: Optional[str] = "image/jpeg"
 
     def message_type(self) -> str:
         return "image"
@@ -47,14 +87,31 @@ class ImageMessage(Message):
 
 @dataclass
 class ToolCallResult:
-    """Represents the result of a tool call when providing it in the chat transcript"""
+    """The result of executing a tool call.
+
+    Attributes:
+        result: The data returned by the tool, can be any JSON-serializable type
+        error: Optional error message if the tool call failed
+    """
 
     result: Any
     error: Optional[str] = None
 
 
 class ToolCallMessage(Message):
-    """A tool call that has been completed with its result"""
+    """A record of a tool being called and its result.
+
+    This represents both the request to call a tool and its response in the
+    conversation history. It's used to show the LLM what happened when a tool
+    was called previously.
+
+    Attributes:
+        tool_name: Name of the tool that was called
+        tool_call_id: Optional unique identifier for this specific call
+        arguments: The arguments that were passed to the tool
+        result: The result returned by the tool
+        role: Always "assistant" since tools are called by the LLM
+    """
 
     tool_name: str
     tool_call_id: Optional[str] = None
@@ -68,16 +125,40 @@ class ToolCallMessage(Message):
 
 ### Prompt Options
 class Tool(BaseModel):
-    """Represents a tool that can be called by the LLM"""
+    """Definition of a tool that the LLM can use.
+
+    Tools represent external functions or APIs that the LLM can call to get
+    information or perform actions.
+
+    Attributes:
+        name: Unique identifier for the tool
+        description: Human-readable description of what the tool does
+        argument_schema: Pydantic model or JSON schema defining the tool's parameters
+
+    Example:
+        ```python
+        class WeatherArgs(BaseModel):
+            location: str
+            units: str = "celsius"
+
+        weather_tool = Tool(
+            name="get_weather",
+            description="Get the current weather for a location",
+            argument_schema=WeatherArgs
+        )
+        ```
+    """
 
     name: str
     description: str
-    argument_schema: Union[
-        Type[BaseModel], Dict
-    ]  # Can be either a Pydantic model or Dict schema
+    argument_schema: Union[Type[BaseModel], Dict]
 
     def get_schema(self) -> Dict:
-        """Get the JSON schema for the tool's arguments"""
+        """Get the JSON schema for the tool's arguments.
+
+        Returns:
+            Dict: JSON Schema object describing the tool's parameters
+        """
         if isinstance(self.argument_schema, type) and issubclass(
             self.argument_schema, BaseModel
         ):
@@ -86,9 +167,33 @@ class Tool(BaseModel):
 
 
 class Prompt:
-    """Complete prompt with system message, conversation history, and available tools"""
+    """A complete prompt to be sent to an LLM.
 
-    TOOL_USE_REQUIRED = "hey"
+    This includes the system message that sets up the LLM's role,
+    the conversation history, and any tools the LLM can use.
+
+    Attributes:
+        system_message: Instructions that define the LLM's role and behavior
+        messages: List of messages in the conversation history
+        tools: Optional list of tools the LLM can use
+
+    Example:
+        ```python
+        prompt = Prompt(
+            system_message="You are a helpful weather assistant.",
+            messages=[
+                UserMessage(content="What's the weather in London?"),
+                ToolCallMessage(
+                    tool_name="get_weather",
+                    arguments={"location": "London"},
+                    result=ToolCallResult(result={"temp": 20, "conditions": "sunny"})
+                )
+            ],
+            tools=[weather_tool]
+        )
+        ```
+    """
+
     system_message: str
     messages: List[Message]
     tools: List[Tool] = field(default_factory=list)
@@ -354,6 +459,6 @@ class LLMResponse:
 #     arguments: Dict
 #     role: str = "assistant"
 
-
+#
 #     def message_type(self) -> str:
 #         return "pending_tool_call"
