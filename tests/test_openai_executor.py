@@ -2,7 +2,6 @@ from prompter.schemas import (
     ImageMessage,
     Tool,
     ToolCallMessage,
-    ToolCallResult,
 )
 from prompter.openai_executor import OpenAIExecutor
 from pydantic import BaseModel
@@ -58,7 +57,7 @@ def test_convert_tool_call_with_result():
         tool_name="get_weather",
         tool_call_id="call_123",
         arguments={"location": "London", "units": "celsius"},
-        result=ToolCallResult(result={"temperature": 20, "conditions": "cloudy"}),
+        result={"temperature": 20, "conditions": "cloudy"},
     )
 
     converted = executor._convert_tool_call_to_api_format(message)
