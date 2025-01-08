@@ -15,3 +15,6 @@ def test_basic_chat(llm_executor):
 
     # The response should be either YES or NO due to system message
     assert response.text().strip().upper() in ["YES", "NO"]
+
+    for message in response.messages():
+        assert message.content in ["YES", "NO"]

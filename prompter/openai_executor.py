@@ -8,6 +8,7 @@ from openai import OpenAI
 from .base_executor import BaseLLMExecutor
 from .schemas import (
     ImageMessage,
+    SchemaResult,
     LLMResponse,
     ModelPricing,
     Prompt,
@@ -16,6 +17,8 @@ from .schemas import (
     ToolCallMessage,
     ToolCallOutputMessage,
     UsageInfo,
+    CompletionInfo,
+    ResponseFormat,
 )
 
 
@@ -45,8 +48,31 @@ class OpenAIExecutor(BaseLLMExecutor):
     def get_api_params(self, prompt: Prompt) -> Dict:
         """Get the API parameters for the prompt"""
         messages = self._convert_prompt_to_api_messages(prompt)
-
         params = {"model": self.model, "messages": messages, **self.kwargs}
+
+        # Handle response formats
+        if prompt.response_schema:
+            params["response_format"] = {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "response",
+                    "schema": prompt.response_schema.model_json_schema(),
+                },
+            }
+            # if self._supports_structured_output():
+            #     params["response_format"] = prompt.response_schema
+            # else:
+            #     # Fall back to JSON mode for older models
+            #     params["response_format"] = {"type": "json_object"}
+            #     if not any("JSON" in msg["content"] for msg in messages):
+            #         # Add JSON instruction if not present
+            #         messages.insert(
+            #             0,
+            #             {
+            #                 "role": "system",
+            #                 "content": "Please respond with valid JSON matching the required schema.",
+            #             },
+            #         )
 
         if prompt.tools:
             params["tools"] = self._convert_tools_to_api_format(prompt.tools)
@@ -63,8 +89,8 @@ class OpenAIExecutor(BaseLLMExecutor):
 
     def _calculate_cost(self, usage: UsageInfo) -> float:
         """Calculate the cost based on OpenAI's pricing"""
-        prompt_cost = (usage.input_tokens / 1000) * self.pricing.input_price
-        completion_cost = (usage.output_tokens / 1000) * self.pricing.output_price
+        prompt_cost = (usage.prompt_tokens / 1000) * self.pricing.input_price
+        completion_cost = (usage.completion_tokens / 1000) * self.pricing.output_price
         return prompt_cost + completion_cost
 
     def _convert_prompt_to_api_messages(self, prompt: Prompt) -> list:
@@ -117,7 +143,7 @@ class OpenAIExecutor(BaseLLMExecutor):
             },
             {
                 "role": "tool",
-                "content": (json.dumps(tool_call.result.result)),
+                "content": (json.dumps(tool_call.result)),
                 "tool_call_id": tool_call_id,
             },
         ]
@@ -142,21 +168,42 @@ class OpenAIExecutor(BaseLLMExecutor):
         """Convert OpenAI's response format to our internal format"""
         messages = []
         tool_schemas = {tool.name: tool.argument_schema for tool in prompt.tools}
+        finish_type = {
+            "stop": CompletionInfo.FinishType.SUCCESS,
+            "tool_calls": CompletionInfo.FinishType.TOOL_USE,
+            "length": CompletionInfo.FinishType.FAIL_LENGTH,
+            "content_filter": CompletionInfo.FinishType.FAIL_FILTER,
+            "error": CompletionInfo.FinishType.FAIL_ERROR,
+        }.get(response.choices[0].finish_reason, CompletionInfo.FinishType.FAIL_ERROR)
 
+        completion_info = CompletionInfo(
+            finish_reason=finish_type,
+        )
+        response_object = None
         for choice in response.choices:
             message = choice.message
+            if prompt.response_schema:
+                response_object = SchemaResult(message.content, prompt.response_schema)
+            # Handle refusals
+            if hasattr(message, "refusal") and isinstance(message.refusal, str):
+                completion_info.refusal = message.refusal
+                continue
 
             # Handle regular text responses
             if message.content:
                 messages.append(TextOutputMessage(content=message.content))
 
+            # Handle structured/parsed responses
+            if hasattr(message, "parsed"):
+                messages.append(TextOutputMessage(content=json.dumps(message.parsed)))
+
             # Handle tool calls
             if message.tool_calls:
                 for tool_call in message.tool_calls:
-                    schema = tool_schemas.get(tool_call.function.name, None)
-
+                    schema = tool_schemas.get(tool_call.function.name)
                     messages.append(
                         ToolCallOutputMessage(
+                            tool_call_id=tool_call.id,
                             name=tool_call.function.name,
                             arguments=tool_call.function.arguments,
                             schema=schema,
@@ -165,10 +212,21 @@ class OpenAIExecutor(BaseLLMExecutor):
 
         return LLMResponse(
             messages=messages,
-            cost=None,
+            cost=self._calculate_cost(response.usage),
             usage=UsageInfo(
-                input_tokens=response.usage.prompt_tokens,
-                output_tokens=response.usage.completion_tokens,
+                prompt_tokens=response.usage.prompt_tokens,
+                completion_tokens=response.usage.completion_tokens,
                 total_tokens=response.usage.total_tokens,
             ),
+            completion_info=completion_info,
+            response_object=response_object,
         )
+
+    def _supports_structured_output(self) -> bool:
+        """Check if the current model supports structured output"""
+        structured_models = {
+            "gpt-4o-2024-08-06",
+            "gpt-4o-mini-2024-07-18",
+            "o1-2024-12-17",
+        }
+        return self.model in structured_models

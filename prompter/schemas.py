@@ -5,12 +5,14 @@ This module contains all the data structures used to represent prompts,
 messages, and responses in a provider-agnostic way.
 """
 
+import uuid
 import json
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Literal, Optional, Type, Union
+from enum import Enum
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 """
 Inputs
@@ -18,7 +20,7 @@ Inputs
 
 
 ### Messages
-class Message(BaseModel):
+class Message:
     """Base class for all message types in a conversation.
 
     All message types must implement message_type() to identify their type.
@@ -46,6 +48,11 @@ class UserMessage(Message):
 
     content: str
     role: str = "user"
+
+    def __init__(self, content):
+        self.content = content
+        self.role = "user"
+        self.type = "text"
 
     def message_type(self) -> str:
         return "text"
@@ -76,26 +83,19 @@ class ImageMessage(Message):
         media_type: MIME type of the image, defaults to JPEG
     """
 
-    role: str = "user"
-    content: Optional[str] = None
+    def __init__(self, url, content=None, media_type="image/jpeg"):
+        self.url = url
+        self.content = content
+        self.media_type = media_type
+        self.role = "user"
+
+    role: str
+    content: Optional[str]
     url: str
-    media_type: Optional[str] = "image/jpeg"
+    media_type: Optional[str]
 
     def message_type(self) -> str:
         return "image"
-
-
-@dataclass
-class ToolCallResult:
-    """The result of executing a tool call.
-
-    Attributes:
-        result: The data returned by the tool, can be any JSON-serializable type
-        error: Optional error message if the tool call failed
-    """
-
-    result: Any
-    error: Optional[str] = None
 
 
 class ToolCallMessage(Message):
@@ -116,8 +116,15 @@ class ToolCallMessage(Message):
     tool_name: str
     tool_call_id: Optional[str] = None
     arguments: Optional[Union[Dict, str]]
-    result: ToolCallResult
+    result: Any
     role: str = "assistant"
+
+    def __init__(self, tool_name, arguments, result, tool_call_id=None):
+        self.tool_name = tool_name
+        self.arguments = arguments
+        self.result = result
+        self.tool_call_id = tool_call_id
+        self.role = "assistant"
 
     def message_type(self) -> str:
         return "tool_call"
@@ -203,11 +210,13 @@ class Prompt:
         system_message: str,
         messages: List[Message],
         tools: List[Tool] = None,
+        response_schema: Type[BaseModel] = None,
         **kwargs,
     ):
         self.system_message = system_message
         self.messages = messages
         self.tools = tools or []
+        self.response_schema = response_schema
 
 
 """
@@ -278,66 +287,58 @@ class ToolCallOutputMessage(OutputMessage):
 
     Attributes:
         name (str): Name of the tool to be called
-        type (str): Always "tool_call"
-
-    Methods:
-        set_schema(schema): Set the Pydantic model for argument validation
-        is_valid(): Check if arguments match the provided schema
-        parsed_arguments(): Get validated arguments as a Pydantic model
-        raw_arguments(): Get unvalidated arguments as a dict
+        tool_call_id (str): Unique identifier for this tool call
+        arguments (SchemaResult): Arguments for the tool call with schema validation
     """
 
-    name: str
-    _arguments: Any
-    _schema: Optional[Type[BaseModel]] = None
+    type = "tool_call"
 
-    def __init__(self, name: str, arguments: str, schema=None):
+    def __init__(
+        self,
+        name: str,
+        arguments: Union[str, Dict],
+        tool_call_id: Optional[str] = None,
+        schema: Optional[Type[BaseModel]] = None,
+    ):
         self.name = name
-        self._arguments = arguments
-        self._schema = schema
+        self.tool_call_id = tool_call_id or str(uuid.uuid4())
+        # Convert arguments to string if they're a dict
+        args_str = json.dumps(arguments) if isinstance(arguments, dict) else arguments
+        self._arguments = SchemaResult(args_str, schema)
 
-    def to_input_message(self, result: str) -> ToolCallMessage:
+    def to_input_message(self, result: Optional[Any] = None) -> ToolCallMessage:
+        """Convert this output message to an input message with optional result
+
+        Args:
+            result: Optional result from executing the tool call
+
+        Returns:
+            ToolCallMessage: Message that can be added to conversation history
+        """
         return ToolCallMessage(
-            name=self.name, arguments=self._arguments, tool_call_id=uuid.uuid()
+            tool_name=self.name,
+            arguments=(
+                self._arguments.parse_obj() if self._arguments.valid_json() else {}
+            ),
+            tool_call_id=self.tool_call_id,
+            result=result,
         )
 
     @property
-    def arguments(self) -> Union[BaseModel, Dict, str]:
-        return self.parse()
-
-    def parse(self) -> Union[BaseModel, Dict, str]:
-        """Parse the arguments into the appropriate type"""
-        # First ensure we have a dict
-        args_dict = (
-            self._arguments
-            if isinstance(self._arguments, dict)
-            else json.loads(self._arguments)
-        )
-
-        # If we have a schema, parse into the model
-        if self._schema is not None:
-            return self._schema.model_validate(args_dict)
-        return args_dict
+    def arguments(self) -> "SchemaResult":
+        """Get the SchemaResult for validating and parsing arguments"""
+        return self._arguments
 
     def text(self) -> str:
-        parsed_args = self.parse()
-        if isinstance(parsed_args, BaseModel):
-            args_str = parsed_args.model_dump_json()
+        """Get a text representation of this tool call"""
+        if self._arguments.valid_json():
+            args_str = json.dumps(self._arguments.parse_obj())
         else:
-            args_str = json.dumps(parsed_args)
+            args_str = self._arguments.raw()
         return f"Tool {self.name} called with arguments {args_str}"
 
     def is_tool_call(self) -> bool:
         return True
-
-    def raise_on_parse_error(self) -> None:
-        pass
-
-    def raw_arguments(self):
-        return self._arguments
-
-    def parsing_failed(self) -> bool:
-        return False
 
     def is_text(self) -> bool:
         return False
@@ -353,120 +354,224 @@ class ModelPricing(BaseModel):
 class UsageInfo(BaseModel):
     """Token usage information from an API call"""
 
-    input_tokens: int = 0
-    output_tokens: int = 0
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
     total_tokens: int = 0
 
 
+class ResponseFormat(Enum):
+    """Type of response format requested from the LLM"""
+
+    TEXT = "text"
+    JSON = "json_object"
+    STRUCTURED = "structured"
+
+
+class CompletionInfo:
+    """Information about how the completion finished"""
+
+    class FinishType(Enum):
+        """Type of completion finish"""
+
+        SUCCESS = "stop"  # Normal completion
+        TOOL_USE = "tool_calls"  # Stopped to make tool calls
+        FAIL_LENGTH = "length"  # Hit token limit
+        FAIL_FILTER = "content_filter"  # Content was filtered
+        FAIL_ERROR = "error"  # Other error occurred
+
+    FAILURE_REASONS = [
+        FinishType.FAIL_LENGTH,
+        FinishType.FAIL_FILTER,
+        FinishType.FAIL_ERROR,
+    ]
+
+    def __init__(self, finish_reason: FinishType, refusal: Optional[str] = None):
+        self.finish_reason = finish_reason
+        self.refusal = refusal
+
+
+class LLMResponseError(Exception):
+    pass
+
+
 class LLMResponse:
-    """
-    Complete response from an LLM, including all outputs and usage information.
-
-    Attributes:
-        messages (List[OutputMessage]): All messages in the response
-        usage (UsageInfo): Token usage information
-        cost (float): Cost of the API call
-
-    Methods:
-        parsed_result() -> T:
-            Parse the entire response according to the provided schema.
-            Raises ValidationError if parsing fails.
-
-        text(include_tool_calls: bool = True) -> str:
-            Get all text content concatenated.
-            Optional parameter to include/exclude tool call descriptions.
-
-        tool_calls(strict: bool = True) -> List[ToolCallOutputMessage]:
-            Get all tool calls.
-            If strict=True, only returns calls with valid arguments.
-
-        single_tool_call() -> ToolCallOutputMessage:
-            Get exactly one tool call.
-            Raises ValueError if there isn't exactly one.
-
-        messages_iter() -> Iterator[OutputMessage]:
-            Iterate through all messages in order.
-
-        tool_calls_iter(strict: bool = True) -> Iterator[ToolCallOutputMessage]:
-            Iterate through tool calls in order.
-            If strict=True, only yields calls with valid arguments.
-
-    Properties:
-        result_type: The type of response (TEXT_ONLY, TOOL_CALLS, or MIXED)
-        has_tool_calls: Whether the response contains any tool calls
-
-    Example:
-        ```python
-        response = executor.execute[WeatherResponse](prompt)
-
-        # Get structured data
-        if response.result_type == ResultType.TEXT_ONLY:
-            weather = response.parsed_result()
-            print(f"Temperature: {weather.temperature}")
-
-        # Process tool calls
-        for tool_call in response.tool_calls_iter():
-            try:
-                args = tool_call.parsed_arguments()
-                result = weather_service.get_weather(**args.dict())
-            except ValidationError:
-                print(f"Invalid args for {tool_call.name}")
-        ```
-    """
-
-    messages: List[OutputMessage]
-    usage: UsageInfo
-    cost: float = 0.0
+    """Complete response from an LLM, including all outputs and usage information."""
 
     def __init__(
-        self, messages: List[OutputMessage], usage: UsageInfo, cost: float = 0.0
+        self,
+        messages: Optional[List[OutputMessage]],
+        usage: UsageInfo,
+        cost: Optional[float] = 0.0,
+        completion_info: Optional[CompletionInfo] = None,
+        response_object=None,
     ):
         self._messages = messages
         self.usage = usage
         self.cost = cost
+        self.completion_info = completion_info or CompletionInfo()
+        self.response_object = response_object
+        self._schema_result = None
 
-    @property
-    def messages(self) -> List[OutputMessage]:
-        return self._messages
+    def result(self) -> Optional["SchemaResult"]:
+        """Get schema validation result if a schema was specified"""
+        if self.response_object is None:
+            raise Exception("uh, no")
+        return self.response_object
+
+    def text(self, include_tools=False):
+        return "\n".join(
+            [
+                message.content
+                for message in self._messages
+                if message.type == "text" or include_tools
+            ]
+        )
 
     def tool_call(self) -> Optional[ToolCallOutputMessage]:
-        all_tool_calls = self.tool_calls()
-        if len(all_tool_calls) == 1:
-            return all_tool_calls[0]
-        elif len(all_tool_calls) == 0:
-            raise ValueError("No tool calls found in response")
-        else:
-            raise ValueError("Multiple tool calls found in response")
+        if len(self.tool_calls()) == 0:
+            return None
+        if len(self.tool_calls()) > 1:
+            raise ValueError(
+                "Multiple tool calls in response, use tool_calls() instead to iterate over them"
+            )
+        return self.tool_calls()[0]
 
-    def tool_calls(self) -> List[ToolCallOutputMessage]:
-        return [
-            message
-            for message in self.messages
-            if isinstance(message, ToolCallOutputMessage)
-        ]
+    def messages(self) -> List[OutputMessage]:
+        """Get all messages in the response"""
+        return self._messages
 
     def text_messages(self) -> List[TextOutputMessage]:
-        return [
-            message
-            for message in self.messages
-            if isinstance(message, TextOutputMessage)
-        ]
+        """Get all text messages in the response"""
+        return [msg for msg in self._messages if msg.type == "text"]
 
-    def text(self) -> str:
-        return "\n".join([message.text() for message in self.messages])
+    def tool_calls(self) -> List[ToolCallOutputMessage]:
+        """Get all tool messages in the response"""
+        return [msg for msg in self._messages if msg.type == "tool_call"]
 
     def raise_for_status(self):
-        pass
+        if not self.completion_info:
+            return
+        """Raise an exception if the response status indicates an error"""
+        if self.completion_info.finish_reason in CompletionInfo.FAILURE_REASONS:
+            raise LLMResponseError(
+                f"Response status: {self.completion_info.finish_reason}"
+            )
 
 
-# @dataclass
-# class PendingToolCall(Message):
-#     """A tool call that has been requested but not yet completed"""
+class SchemaResult:
+    """Handles validation and parsing of LLM responses against a schema.
 
-#     tool_name: str
-#     arguments: Dict
-#     role: str = "assistant"
+    This class provides methods to:
+    1. Check if the response is valid JSON
+    2. Check if it matches the expected schema
+    3. Parse the response into either a dict or schema instance
 
-#
-#     def message_type(self) -> str:
-#         return "pending_tool_call"
+    Example:
+        ```python
+        result = response.result()
+        if result.valid():
+            character = result.parse()  # Returns schema instance
+        elif result.valid_json():
+            data = result.parse_obj()  # Returns dict, even if schema invalid
+        ```
+    """
+
+    def __init__(self, input_data: str, schema: Optional[Type[BaseModel]] = None):
+        """
+        Args:
+            input_data: Raw text response from LLM
+            schema: Optional Pydantic model to validate against
+        """
+        self.input_data = input_data
+        self._schema = schema
+        self._parsed_json = None
+        self._json_valid = None
+
+    @classmethod
+    def from_parsed(cls, parsed_obj: BaseModel, schema: Type[BaseModel]):
+        json_dump = parsed_obj.model_dump_json
+        return cls(json_dump, schema)
+
+    def valid(self) -> bool:
+        """Check if response is valid according to schema.
+
+        If no schema was specified, checks if response is valid JSON.
+
+        Returns:
+            bool: True if valid, False otherwise
+        """
+        if not self.valid_json():
+            return False
+
+        if self._schema is None:
+            return True
+
+        try:
+            self._schema.model_validate(self._parsed_json)
+            return True
+        except ValidationError:
+            return False
+
+    def valid_json(self) -> bool:
+        """Check if response is valid JSON.
+
+        Returns:
+            bool: True if valid JSON, False otherwise
+        """
+        if self._json_valid is not None:
+            return self._json_valid
+
+        try:
+            self._parsed_json = json.loads(self.input_data)
+            self._json_valid = True
+            return True
+        except json.JSONDecodeError:
+            self._json_valid = False
+            return False
+
+    def parse_obj(self) -> Union[Dict, List]:
+        """Parse response as JSON into dict/list.
+
+        Returns:
+            Union[Dict, List]: Parsed JSON data
+
+        Raises:
+            JSONDecodeError: If response is not valid JSON
+        """
+        if not self.valid_json():
+            raise json.JSONDecodeError("Invalid JSON", self.input_data, 0)
+        return self._parsed_json
+
+    def parse(self) -> BaseModel:
+        """Parse response into schema instance.
+
+        Returns:
+            BaseModel: Instance of schema class
+
+        Raises:
+            JSONDecodeError: If response is not valid JSON
+            SchemaValidationError: If response doesn't match schema
+            ValueError: If no schema was specified
+        """
+        if self._schema is None:
+            raise ValueError("No schema specified")
+
+        if not self.valid_json():
+            raise json.JSONDecodeError("Invalid JSON", self.input_data, 0)
+
+        try:
+            return self._schema.model_validate(self._parsed_json)
+        except ValidationError as e:
+            raise SchemaValidationError(str(e))
+
+    def raw(self) -> str:
+        """Get raw response text.
+
+        Returns:
+            str: Original response text
+        """
+        return self.input_data
+
+
+class SchemaValidationError(Exception):
+    pass

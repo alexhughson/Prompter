@@ -16,6 +16,7 @@ from .schemas import (
     ToolCallMessage,
     ToolCallOutputMessage,
     UsageInfo,
+    CompletionInfo,
 )
 
 
@@ -64,6 +65,25 @@ class AnthropicExecutor(BaseLLMExecutor):
         if prompt.tools:
             params["tools"] = self._convert_tools_to_api_format(prompt.tools)
 
+        if prompt.response_schema:
+            if prompt.tools:
+                print("WARNING, response schema with tools is bad news")
+
+            params["tools"] = self._convert_tools_to_api_format(
+                [
+                    Tool(
+                        name="response",
+                        description="Use to send response",
+                        argument_schema=prompt.response_schema,
+                    )
+                ]
+            )
+            params["tool_choice"] = {
+                "type": "tool",
+                "name": "response",
+                "disable_parallel_tool_use": True,
+            }
+
         return params
 
     def execute(self, prompt: Prompt) -> LLMResponse:
@@ -76,8 +96,8 @@ class AnthropicExecutor(BaseLLMExecutor):
 
     def _calculate_cost(self, usage: UsageInfo) -> float:
         """Calculate the cost based on Anthropic's pricing"""
-        prompt_cost = (usage.input_tokens / 1000) * self.pricing.input_price
-        completion_cost = (usage.output_tokens / 1000) * self.pricing.output_price
+        prompt_cost = (usage.prompt_tokens / 1000) * self.pricing.input_price
+        completion_cost = (usage.completion_tokens / 1000) * self.pricing.output_price
         return prompt_cost + completion_cost
 
     def _convert_prompt_to_api_messages(self, prompt: Prompt) -> list:
@@ -160,7 +180,7 @@ class AnthropicExecutor(BaseLLMExecutor):
                     {
                         "type": "tool_result",
                         "tool_use_id": tool_call_id,
-                        "content": (json.dumps(msg.result.result)),
+                        "content": (json.dumps(msg.result)),
                     }
                 ],
             },
@@ -173,30 +193,53 @@ class AnthropicExecutor(BaseLLMExecutor):
         """Convert Anthropic's response format to our internal format"""
         messages = []
         tool_schemas = {tool.name: tool.argument_schema for tool in prompt.tools}
+        if prompt.response_schema:
+            tool_schemas["response"] = prompt.response_schema
+        # Map Anthropic's stop reasons to our finish reasons
+        finish_reason_map = {
+            "stop_sequence": CompletionInfo.FinishType.SUCCESS,  # Normal completion
+            "max_tokens": CompletionInfo.FinishType.FAIL_LENGTH,  # Truncated
+            "content_filter": CompletionInfo.FinishType.FAIL_FILTER,  # Filtered
+            "end_turn": CompletionInfo.FinishType.SUCCESS,  # Another way Anthropic indicates normal completion
+            "tool_use": CompletionInfo.FinishType.TOOL_USE,  # Tool call
+        }
+
+        # Create completion info with mapped finish reason
+        mapped_reason = finish_reason_map.get(
+            response.stop_reason, response.stop_reason
+        )
+
+        completion_info = CompletionInfo(
+            finish_reason=mapped_reason,
+        )
 
         # Handle each content block
         for content in response.content:
-
             if content.type == "text":
                 messages.append(TextOutputMessage(content=content.text))
             elif content.type == "tool_use":
                 schema = tool_schemas.get(content.name, None)
-
                 messages.append(
                     ToolCallOutputMessage(
                         name=content.name, arguments=content.input, schema=schema
                     )
                 )
+        response_object = None
+        if prompt.response_schema:
+            response_object = messages[0].arguments
 
-        # Create usage info
+        # Create usage info - calculate total tokens from input and output
+        total_tokens = response.usage.input_tokens + response.usage.output_tokens
         usage = UsageInfo(
-            input_tokens=response.usage.input_tokens,
-            output_tokens=response.usage.output_tokens,
-            total_tokens=response.usage.input_tokens + response.usage.output_tokens,
+            prompt_tokens=response.usage.input_tokens,
+            completion_tokens=response.usage.output_tokens,
+            total_tokens=total_tokens,
         )
 
         return LLMResponse(
             messages=messages,
             cost=self._calculate_cost(usage),
             usage=usage,
+            completion_info=completion_info,
+            response_object=response_object,
         )

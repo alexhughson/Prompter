@@ -2,7 +2,8 @@ from prompter.schemas import (
     ImageMessage,
     Tool,
     ToolCallMessage,
-    ToolCallResult,
+    Prompt,
+    UserMessage,
 )
 from prompter.anthropic_executor import AnthropicExecutor
 from pydantic import BaseModel
@@ -69,7 +70,7 @@ def test_convert_tool_call_with_result():
         tool_name="get_weather",
         tool_call_id="call_123",
         arguments={"location": "London", "units": "celsius"},
-        result=ToolCallResult(result={"temperature": 20, "conditions": "cloudy"}),
+        result={"temperature": 20, "conditions": "cloudy"},
     )
 
     converted = executor._convert_tool_call_to_api_format(message)
@@ -163,3 +164,17 @@ def test_convert_tool_call_with_error():
     assert (
         error_result["content"][0]["content"] == "null"
     )  # Error results have null content
+
+
+def test_stop_reason_mapping():
+    anthropic_executor = AnthropicExecutor()
+    """Test that Anthropic's stop reasons are correctly mapped"""
+    prompt = Prompt(
+        system_message="You are a helpful assistant.",
+        messages=[UserMessage("Hello")],
+    )
+
+    response = anthropic_executor.execute(prompt)
+
+    assert response.status == "success"
+    response.raise_for_status()  # Should not raise
