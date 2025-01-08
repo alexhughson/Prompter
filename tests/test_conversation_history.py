@@ -4,7 +4,6 @@ from prompter.schemas import (
     AssistantMessage,
     Tool,
     ToolCallMessage,
-    ToolCallResult,
 )
 from pydantic import BaseModel
 
@@ -30,9 +29,7 @@ def test_conversation_with_completed_tool_calls(llm_executor):
             ToolCallMessage(
                 tool_name="get_weather",
                 arguments={"location": "Tokyo", "units": "celsius"},
-                result=ToolCallResult(
-                    result={"temperature": 22, "conditions": "sunny"}
-                ),
+                result={"temperature": 22, "conditions": "sunny"},
             ),
         ],
         tools=[weather_tool],
@@ -61,17 +58,12 @@ def test_conversation_with_error_tool_calls(llm_executor):
             ToolCallMessage(
                 tool_name="get_weather",
                 arguments={"location": "Tokyo", "units": "celsius"},
-                result=ToolCallResult(
-                    result={"temperature": 22, "conditions": "sunny"}
-                ),
+                result={"temperature": 22, "conditions": "sunny"},
             ),
             ToolCallMessage(
                 tool_name="get_weather",
                 arguments={"location": "InvalidCity", "units": "celsius"},
-                result=ToolCallResult(
-                    result=None,
-                    error="Location 'InvalidCity' not found",
-                ),
+                result="Location 'InvalidCity' not found",
             ),
             AssistantMessage(
                 content="I found the weather for Tokyo, but InvalidCity isn't a valid location."
@@ -85,5 +77,5 @@ def test_conversation_with_error_tool_calls(llm_executor):
     response.raise_for_status()
 
     # The LLM should make a tool call for London
-    cities = {call.arguments.location.lower() for call in response.tool_calls()}
+    cities = {call.arguments.parse().location.lower() for call in response.tool_calls()}
     assert "london" in cities

@@ -69,6 +69,9 @@ class AssistantMessage(Message):
     content: str
     role: str = "assistant"
 
+    def __init__(self, content):
+        self.content = content
+
     def message_type(self) -> str:
         return "text"
 
