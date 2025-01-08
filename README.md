@@ -47,6 +47,7 @@ except SchemaValidationError as e:
 # Or check validity first
 if result.valid():
     character = result.parse()  # Safe to call
+    print(f"The character's name is {character.name}")
 else:
     print("Response didn't match schema")
 
@@ -56,6 +57,7 @@ print(result.raw())  # Original LLM response
 # Get dict representation (raises if not valid JSON)
 try:
     char_dict = result.parse_obj()
+    print(f"The character's name is {char_dict['name']}')
     print(f"As dict: {char_dict}")
 except JSONDecodeError:
     print("Response wasn't valid JSON")
@@ -63,6 +65,9 @@ except JSONDecodeError:
 if result.valid_json():
     # safe to call
     dict = result.parse_obj()
+else:
+    raw_result = result.raw()
+    print(f"The llm returned {raw_result}")
 ```
 
 
@@ -94,12 +99,13 @@ for tool_call in response.tool_calls():
     if tool_call.arguments.valid():
         args = tool_call.arguments.parse()  # Returns WeatherArgs instance
         weather = get_weather(**args.dict())
-        response.add_tool_result(tool_call.id, weather)
+        prompt.messages.append(tool_call.to_input_message(result=weather))
+
     else:
         print(f"Invalid tool arguments: {tool_call.arguments.raw()}")
-
+response = OpenAIExecutor().execute(prompt)
 # Get all messages including tool results
-print(response.text(include_tools=True))
+print(response.text())
 ```
 
 ## Error Handling Patterns
@@ -139,7 +145,7 @@ def get_character(retries: int = 3) -> Character:
   - `.result()` - Returns SchemaResult when response_schema was specified
   - `.messages()` - All messages
   - `.tool_calls()` - Just the tool calls
-  - `.text()` - All text including optional tool results
+  - `.text(include_tool_calls=)` - All text including optional tool results
   - `.text_messages()` - Just the text messages
 - SchemaResult methods:
   - `.parse()` - Returns instance of schema class
