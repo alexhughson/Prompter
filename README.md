@@ -142,11 +142,8 @@ def get_character(retries: int = 3) -> Character:
 ## Key Concepts
 
 - Response methods:
-  - `.result()` - Returns SchemaResult when response_schema was specified
-  - `.messages()` - All messages
   - `.tool_calls()` - Just the tool calls
   - `.text(include_tool_calls=)` - All text including optional tool results
-  - `.text_messages()` - Just the text messages
 - SchemaResult methods:
   - `.parse()` - Returns instance of schema class
   - `.parse_obj()` - Returns dict/list representation

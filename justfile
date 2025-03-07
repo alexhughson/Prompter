@@ -2,20 +2,21 @@
 set windows-shell := ["powershell.exe", "-NoLogo", "-Command"]
 set positional-arguments
 # Run tests (usage: just t or just t anthropic)
-@t *ARGS='':
-    #!/usr/bin/env python3
-    import sys
-    from pathlib import Path
-    import subprocess
+# @t *ARGS='':
+#     #!/usr/bin/env python3
+#     import sys
+#     from pathlib import Path
+#     import subprocess
 
-    args = "{{ARGS}}"
-    cmd = f"tests/test_{args}.py" if args else "tests/"
+#     args = "{{ARGS}}"
+#     cmd = f"tests/test_{args}.py" if args else "tests/"
 
-    venv = Path('.venv')
-    pytest = venv / ('Scripts' if sys.platform == 'win32' else 'bin') / 'pytest'
-    subprocess.run([str(pytest), cmd, "-vsx"], check=True)
+#     venv = Path('.venv')
+#     pytest = venv / ('Scripts' if sys.platform == 'win32' else 'bin') / 'pytest'
+#     subprocess.run([str(pytest), cmd, "--tb=no", "-rA"], check=True)
 
-
+t:
+    pytest -xvs
 
 # Default recipe that sets up everything
 setup: _ensure-venv _install-deps
@@ -46,10 +47,10 @@ _install-deps:
 
 # Run all linting checks
 lint:
-    .venv/bin/flake8 prompter tests
-    .venv/bin/mypy prompter tests
-    .venv/bin/black --check prompter tests
-    .venv/bin/isort --check-only prompter tests
+    .venv/bin/black .
+
+    .venv/bin/isort  .
+    .venv/bin/pyright .
 
 # Format code
 format:

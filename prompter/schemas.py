@@ -5,12 +5,12 @@ This module contains all the data structures used to represent prompts,
 messages, and responses in a provider-agnostic way.
 """
 
-import uuid
 import json
+import uuid
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Literal, Optional, Type, Union
 from enum import Enum
+from typing import Any, ClassVar, Dict, List, Literal, Optional, Type, Union
 
 from pydantic import BaseModel, ValidationError
 
@@ -19,118 +19,75 @@ Inputs
 """
 
 
-### Messages
-class Message:
-    """Base class for all message types in a conversation.
-
-    All message types must implement message_type() to identify their type.
-    This allows executors to properly handle different kinds of messages
-    (text, images, tool calls, etc).
-    """
-
-    @abstractmethod
-    def message_type(self) -> str:
-        """Get the type identifier for this message.
-
-        Returns:
-            str: The message type identifier (e.g., "text", "image", "tool_call")
-        """
-        pass
+class ToolUse(str, Enum):
+    REQUIRED = "required"
+    OPTIONAL = "optional"
+    NONE = "none"
 
 
-class UserMessage(Message):
-    """A text message from the user to the LLM.
+class MessageType(str, Enum):
+    TEXT = "text"
+    IMAGE = "image"
+    TOOL_CALL = "tool_call"
 
-    Attributes:
-        content: The text content of the message
-        role: Always "user" for user messages
-    """
+
+class Role(str, Enum):
+    USER = "user"
+    ASSISTANT = "assistant"
+    SYSTEM = "system"
+    DEVELOPER = "developer"
+
+
+@dataclass
+class TextMessage:
+    """A text message from the user"""
 
     content: str
-    role: str = "user"
+    role: Role
+    type: Literal[MessageType.TEXT] = MessageType.TEXT
 
-    def __init__(self, content):
-        self.content = content
-        self.role = "user"
-        self.type = "text"
+    @classmethod
+    def user(cls, content: str) -> "TextMessage":
+        return cls(role=Role.USER, content=content)
 
-    def message_type(self) -> str:
-        return "text"
-
-
-class AssistantMessage(Message):
-    """A text response from the LLM.
-
-    Attributes:
-        content: The text content of the message
-        role: Always "assistant" for LLM responses
-    """
-
-    content: str
-    role: str = "assistant"
-
-    def __init__(self, content):
-        self.content = content
-
-    def message_type(self) -> str:
-        return "text"
+    @classmethod
+    def assistant(cls, content: str) -> "TextMessage":
+        return cls(role=Role.ASSISTANT, content=content)
 
 
-class ImageMessage(Message):
-    """An image with optional caption to be shown to the LLM.
+@dataclass
+class ImageMessage:
+    """An image message with optional text caption"""
 
-    Attributes:
-        url: URL of the image to be processed
-        content: Optional caption or description of the image
-        role: Always "user" as only users can send images
-        media_type: MIME type of the image, defaults to JPEG
-    """
-
-    def __init__(self, url, content=None, media_type="image/jpeg"):
-        self.url = url
-        self.content = content
-        self.media_type = media_type
-        self.role = "user"
-
-    role: str
-    content: Optional[str]
     url: str
-    media_type: Optional[str]
+    role: Role
+    type: Literal[MessageType.IMAGE] = MessageType.IMAGE
+    media_type: str = "image/jpeg"
 
-    def message_type(self) -> str:
-        return "image"
+    @classmethod
+    def user(cls, url) -> "ImageMessage":
+        return cls(role=Role.USER, url=url)
+
+    @classmethod
+    def assistant(cls, url) -> "ImageMessage":
+
+        return cls(role=Role.ASSISTANT, url=url)
 
 
-class ToolCallMessage(Message):
-    """A record of a tool being called and its result.
-
-    This represents both the request to call a tool and its response in the
-    conversation history. It's used to show the LLM what happened when a tool
-    was called previously.
-
-    Attributes:
-        tool_name: Name of the tool that was called
-        tool_call_id: Optional unique identifier for this specific call
-        arguments: The arguments that were passed to the tool
-        result: The result returned by the tool
-        role: Always "assistant" since tools are called by the LLM
-    """
+@dataclass
+class ToolCallMessage:
+    """A tool call message with args and optional result"""
 
     tool_name: str
-    tool_call_id: Optional[str] = None
-    arguments: Optional[Union[Dict, str]]
-    result: Any
-    role: str = "assistant"
+    arguments: dict
+    type: Literal[MessageType.TOOL_CALL] = MessageType.TOOL_CALL
+    result: dict | str | None = None
+    tool_call_id: str | None = None
+    content: str = ""
+    role: Literal[Role.ASSISTANT] = Role.ASSISTANT
 
-    def __init__(self, tool_name, arguments, result, tool_call_id=None):
-        self.tool_name = tool_name
-        self.arguments = arguments
-        self.result = result
-        self.tool_call_id = tool_call_id
-        self.role = "assistant"
 
-    def message_type(self) -> str:
-        return "tool_call"
+Message = TextMessage | ImageMessage | ToolCallMessage
 
 
 ### Prompt Options
@@ -161,7 +118,7 @@ class Tool(BaseModel):
 
     name: str
     description: str
-    argument_schema: Union[Type[BaseModel], Dict]
+    argument_schema: Type[BaseModel]
 
     def get_schema(self) -> Dict:
         """Get the JSON schema for the tool's arguments.
@@ -169,11 +126,11 @@ class Tool(BaseModel):
         Returns:
             Dict: JSON Schema object describing the tool's parameters
         """
-        if isinstance(self.argument_schema, type) and issubclass(
-            self.argument_schema, BaseModel
-        ):
-            return self.argument_schema.model_json_schema()
-        return self.argument_schema
+        # if isinstance(self.argument_schema, type) and issubclass(
+        #     self.argument_schema, BaseModel
+        # ):
+        return self.argument_schema.model_json_schema()
+        # return self.argument_schema
 
 
 class Prompt:
@@ -212,8 +169,8 @@ class Prompt:
         self,
         system_message: str,
         messages: List[Message],
-        tools: List[Tool] = None,
-        response_schema: Type[BaseModel] = None,
+        tools: List[Tool] | None = None,
+        response_schema: Type[BaseModel] | None = None,
         **kwargs,
     ):
         self.system_message = system_message
@@ -227,35 +184,20 @@ Outputs
 """
 
 
-class OutputMessage:
-    """
-    Base class for all types of LLM output messages.
+@dataclass
+class ThoughtOutputMessage:
+    content: str
+    type: str = "thinking"
 
-    All message types must implement:
-    - text(): Returns a string representation of the message
-    - is_tool_call(): Returns whether this message represents a tool call
-    """
+    def __init__(self, content: str):
+        self.content = content
 
-    type: str
-
-    @abstractmethod
     def text(self) -> str:
-        pass
-
-    @abstractmethod
-    def is_tool_call(self) -> bool:
-        pass
-
-    @abstractmethod
-    def is_text(self) -> bool:
-        return not self.is_tool_call()
-
-    @abstractmethod
-    def raise_on_parse_error(self) -> None:
-        pass
+        return self.content
 
 
-class TextOutputMessage(OutputMessage):
+@dataclass
+class TextOutputMessage:
     content: str
     type: str = "text"
 
@@ -275,16 +217,8 @@ class TextOutputMessage(OutputMessage):
         return True
 
 
-# TODO
-# class ImageOutputMessage(OutputMessage):
-#     image_url: str
-#     type: str = "image"
-
-#     def text(self) -> str:
-#         return f"Image: {self.image_url}"
-
-
-class ToolCallOutputMessage(OutputMessage):
+@dataclass
+class ToolCallOutputMessage:
     """
     Represents a tool call requested by the LLM.
 
@@ -299,15 +233,18 @@ class ToolCallOutputMessage(OutputMessage):
     def __init__(
         self,
         name: str,
-        arguments: Union[str, Dict],
+        arguments: dict,
+        schema: Type[BaseModel],
         tool_call_id: Optional[str] = None,
-        schema: Optional[Type[BaseModel]] = None,
     ):
         self.name = name
         self.tool_call_id = tool_call_id or str(uuid.uuid4())
         # Convert arguments to string if they're a dict
-        args_str = json.dumps(arguments) if isinstance(arguments, dict) else arguments
-        self._arguments = SchemaResult(args_str, schema)
+
+        self._arguments = SchemaResult(arguments, schema)
+
+    def __str__(self) -> str:
+        return json.dumps(self._arguments.raw())
 
     def to_input_message(self, result: Optional[Any] = None) -> ToolCallMessage:
         """Convert this output message to an input message with optional result
@@ -347,22 +284,10 @@ class ToolCallOutputMessage(OutputMessage):
         return False
 
 
-class ModelPricing(BaseModel):
-    """Pricing information for a specific model"""
-
-    input_price: float  # Cost per 1K input tokens
-    output_price: float  # Cost per 1K output tokens
+OutputMessage = TextOutputMessage | ToolCallOutputMessage | ThoughtOutputMessage
 
 
-class UsageInfo(BaseModel):
-    """Token usage information from an API call"""
-
-    prompt_tokens: int = 0
-    completion_tokens: int = 0
-    total_tokens: int = 0
-
-
-class ResponseFormat(Enum):
+class ResponseFormat(str, Enum):
     """Type of response format requested from the LLM"""
 
     TEXT = "text"
@@ -370,27 +295,33 @@ class ResponseFormat(Enum):
     STRUCTURED = "structured"
 
 
+class FinishType(str, Enum):
+    """Type of completion finish"""
+
+    SUCCESS = "stop"  # Normal completion
+    TOOL_USE = "tool_calls"  # Stopped to make tool calls
+    FAIL_LENGTH = "length"  # Hit token limit
+    FAIL_FILTER = "content_filter"  # Content was filtered
+    FAIL_ERROR = "error"  # Other error occurred
+
+
+@dataclass
 class CompletionInfo:
     """Information about how the completion finished"""
 
-    class FinishType(Enum):
-        """Type of completion finish"""
+    finish_reason: FinishType
 
-        SUCCESS = "stop"  # Normal completion
-        TOOL_USE = "tool_calls"  # Stopped to make tool calls
-        FAIL_LENGTH = "length"  # Hit token limit
-        FAIL_FILTER = "content_filter"  # Content was filtered
-        FAIL_ERROR = "error"  # Other error occurred
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+    cached_tokens: int | None = None
 
-    FAILURE_REASONS = [
+    refusal: Optional[str] = None
+
+    FAILURE_REASONS: ClassVar[list[FinishType]] = [
         FinishType.FAIL_LENGTH,
         FinishType.FAIL_FILTER,
         FinishType.FAIL_ERROR,
     ]
-
-    def __init__(self, finish_reason: FinishType, refusal: Optional[str] = None):
-        self.finish_reason = finish_reason
-        self.refusal = refusal
 
 
 class LLMResponseError(Exception):
@@ -402,18 +333,15 @@ class LLMResponse:
 
     def __init__(
         self,
-        messages: Optional[List[OutputMessage]],
-        usage: UsageInfo,
+        messages: List[OutputMessage],
         cost: Optional[float] = 0.0,
         completion_info: Optional[CompletionInfo] = None,
         response_object=None,
     ):
         self._messages = messages
-        self.usage = usage
         self.cost = cost
-        self.completion_info = completion_info or CompletionInfo()
+        self.completion_info = completion_info
         self.response_object = response_object
-        self._schema_result = None
 
     def result(self) -> Optional["SchemaResult"]:
         """Get schema validation result if a schema was specified"""
@@ -421,12 +349,28 @@ class LLMResponse:
             raise Exception("uh, no")
         return self.response_object
 
-    def text(self, include_tools=False):
+    def text(self, include_tools=False, include_thoughts=False):
+        def _to_text(message: OutputMessage) -> str:
+            if isinstance(message, TextOutputMessage):
+                return message.content
+            elif isinstance(message, ToolCallOutputMessage):
+                return str(message)
+            elif isinstance(message, ThoughtOutputMessage):
+                return message.content
+
+        def _should_include(message: OutputMessage) -> bool:
+            if isinstance(message, TextOutputMessage):
+                return True
+            elif isinstance(message, ToolCallOutputMessage):
+                return include_tools
+            elif isinstance(message, ThoughtOutputMessage):
+                return include_thoughts
+
         return "\n".join(
             [
-                message.content
+                _to_text(message)
                 for message in self._messages
-                if message.type == "text" or include_tools
+                if _should_include(message)
             ]
         )
 
@@ -445,11 +389,11 @@ class LLMResponse:
 
     def text_messages(self) -> List[TextOutputMessage]:
         """Get all text messages in the response"""
-        return [msg for msg in self._messages if msg.type == "text"]
+        return [msg for msg in self._messages if isinstance(msg, TextOutputMessage)]
 
     def tool_calls(self) -> List[ToolCallOutputMessage]:
         """Get all tool messages in the response"""
-        return [msg for msg in self._messages if msg.type == "tool_call"]
+        return [msg for msg in self._messages if isinstance(msg, ToolCallOutputMessage)]
 
     def raise_for_status(self):
         if not self.completion_info:
@@ -479,7 +423,9 @@ class SchemaResult:
         ```
     """
 
-    def __init__(self, input_data: str, schema: Optional[Type[BaseModel]] = None):
+    _parsed_json: dict | None = None
+
+    def __init__(self, input_data: str | dict, schema: Type[BaseModel]):
         """
         Args:
             input_data: Raw text response from LLM
@@ -487,13 +433,20 @@ class SchemaResult:
         """
         self.input_data = input_data
         self._schema = schema
-        self._parsed_json = None
-        self._json_valid = None
+        if isinstance(self.input_data, str):
+            try:
+                self._parsed_json = json.loads(self.input_data)
+            except json.JSONDecodeError:
+                self._parsed_json = None
+        else:
+            self._parsed_json = self.input_data
 
-    @classmethod
-    def from_parsed(cls, parsed_obj: BaseModel, schema: Type[BaseModel]):
-        json_dump = parsed_obj.model_dump_json
-        return cls(json_dump, schema)
+    # @classmethod
+    # def from_parsed(
+    #     cls: "SchemaResult", parsed_obj: BaseModel, schema: Type[BaseModel]
+    # ):
+    #     json_dump = parsed_obj.model_dump_json
+    #     return cls(json_dump, schema)
 
     def valid(self) -> bool:
         """Check if response is valid according to schema.
@@ -503,11 +456,15 @@ class SchemaResult:
         Returns:
             bool: True if valid, False otherwise
         """
-        if not self.valid_json():
+        if self._parsed_json is None:
             return False
 
-        if self._schema is None:
-            return True
+        # if not isinstance(self._schema, Type):
+        #     # Todo, actually validate against a json schema
+        #     return True
+
+        if not issubclass(self._schema, BaseModel):
+            raise ValueError("Schema must be a subclass of BaseModel")
 
         try:
             self._schema.model_validate(self._parsed_json)
@@ -521,28 +478,19 @@ class SchemaResult:
         Returns:
             bool: True if valid JSON, False otherwise
         """
-        if self._json_valid is not None:
-            return self._json_valid
+        return self._parsed_json is not None
 
-        try:
-            self._parsed_json = json.loads(self.input_data)
-            self._json_valid = True
-            return True
-        except json.JSONDecodeError:
-            self._json_valid = False
-            return False
-
-    def parse_obj(self) -> Union[Dict, List]:
+    def parse_obj(self) -> dict:
         """Parse response as JSON into dict/list.
 
         Returns:
-            Union[Dict, List]: Parsed JSON data
+            dict | list: Parsed JSON data
 
         Raises:
             JSONDecodeError: If response is not valid JSON
         """
-        if not self.valid_json():
-            raise json.JSONDecodeError("Invalid JSON", self.input_data, 0)
+        if self._parsed_json is None:
+            raise json.JSONDecodeError("Invalid JSON", str(self.input_data), 0)
         return self._parsed_json
 
     def parse(self) -> BaseModel:
@@ -556,18 +504,19 @@ class SchemaResult:
             SchemaValidationError: If response doesn't match schema
             ValueError: If no schema was specified
         """
-        if self._schema is None:
+        if not isinstance(self._schema, Type):
             raise ValueError("No schema specified")
-
-        if not self.valid_json():
-            raise json.JSONDecodeError("Invalid JSON", self.input_data, 0)
+        if not issubclass(self._schema, BaseModel):
+            raise ValueError("Schema must be a subclass of BaseModel")
+        if self._parsed_json is None:
+            raise json.JSONDecodeError("Invalid JSON", str(self.input_data), 0)
 
         try:
-            return self._schema.model_validate(self._parsed_json)
+            return self._schema(**self._parsed_json)
         except ValidationError as e:
             raise SchemaValidationError(str(e))
 
-    def raw(self) -> str:
+    def raw(self) -> str | dict | None:
         """Get raw response text.
 
         Returns:

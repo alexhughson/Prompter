@@ -1,11 +1,6 @@
-from prompter.schemas import (
-    Prompt,
-    UserMessage,
-    AssistantMessage,
-    Tool,
-    ToolCallMessage,
-)
 from pydantic import BaseModel
+
+from prompter.schemas import Prompt, TextMessage, Tool, ToolCallMessage
 
 
 class WeatherArgs(BaseModel):
@@ -24,8 +19,8 @@ def test_conversation_with_completed_tool_calls(llm_executor):
     prompt = Prompt(
         system_message="You are a helpful weather assistant.",
         messages=[
-            UserMessage(content="What's the weather like in Tokyo?"),
-            AssistantMessage(content="Let me check that for you."),
+            TextMessage.user("What's the weather like in Tokyo?"),
+            TextMessage.assistant("Let me check that for you."),
             ToolCallMessage(
                 tool_name="get_weather",
                 arguments={"location": "Tokyo", "units": "celsius"},
@@ -53,8 +48,10 @@ def test_conversation_with_error_tool_calls(llm_executor):
     prompt = Prompt(
         system_message="You are a helpful weather assistant.",
         messages=[
-            UserMessage(content="What's the weather like in Tokyo and InvalidCity?"),
-            AssistantMessage(content="I'll check both locations."),
+            TextMessage.user(
+                content="What's the weather like in Tokyo and InvalidCity?"
+            ),
+            TextMessage.assistant(content="I'll check both locations."),
             ToolCallMessage(
                 tool_name="get_weather",
                 arguments={"location": "Tokyo", "units": "celsius"},
@@ -65,10 +62,10 @@ def test_conversation_with_error_tool_calls(llm_executor):
                 arguments={"location": "InvalidCity", "units": "celsius"},
                 result="Location 'InvalidCity' not found",
             ),
-            AssistantMessage(
+            TextMessage.assistant(
                 content="I found the weather for Tokyo, but InvalidCity isn't a valid location."
             ),
-            UserMessage(content="Ok, check London instead of InvalidCity"),
+            TextMessage.user(content="Ok, check London instead of InvalidCity"),
         ],
         tools=[weather_tool],
     )

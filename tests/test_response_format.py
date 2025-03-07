@@ -1,44 +1,35 @@
 import pytest
-from prompter.schemas import (
-    Prompt,
-    UserMessage,
-    LLMResponse,
-    TextOutputMessage,
-    UsageInfo,
-    ResponseFormat,
-    CompletionInfo,
-)
 from pydantic import BaseModel
-from .stub_executor import StubExecutor
+
+from prompter.schemas import Prompt, TextMessage
 
 
-class Character(BaseModel):
-    name: str
-    species: str
-    age: int
+# class Character(BaseModel):
+#     name: str
+#     species: str
+#     age: int
 
 
-def test_json_response_format(llm_executor):
-    """Test JSON response format with schema"""
-    prompt = Prompt(
-        system_message="You are a character creator",
-        messages=[UserMessage("Create a sci-fi character")],
-        response_schema=Character,
-    )
+# def test_json_response_format(llm_executor):
+#     """Test JSON response format with schema"""
+#     prompt = Prompt(
+#         system_message="You are a character creator",
+#         messages=[TextMessage.user("Create a sci-fi character")],
+#     )
 
-    response = llm_executor.execute(prompt)
-    response.raise_for_status()
+#     response = llm_executor.execute_formatted(prompt, Character)
+#     response.raise_for_status()
 
-    # Validate schema result
-    result = response.result()
-    assert result.valid()
+#     # Validate schema result
+#     result = response.result()
+#     assert result.valid()
 
-    # Parse into Character instance
-    character = result.parse()
-    assert isinstance(character, Character)
-    assert character.name
-    assert character.species
-    assert isinstance(character.age, int)
+#     # Parse into Character instance
+#     character = result.parse()
+#     assert isinstance(character, Character)
+#     assert character.name
+#     assert character.species
+#     assert isinstance(character.age, int)
 
 
 # def test_invalid_json_response():

@@ -41,3 +41,5 @@ prompter/_version.py
 
 # Sphinx documentation
 docs/_build/
+
+.env

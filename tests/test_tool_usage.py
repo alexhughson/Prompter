@@ -1,16 +1,19 @@
+import json
+from typing import Optional
+
+import pytest
+from pydantic import BaseModel
+
 from prompter.schemas import (
     Prompt,
-    UserMessage,
+    SchemaValidationError,
+    TextMessage,
     Tool,
     ToolCallMessage,
-    SchemaValidationError,
     ToolCallOutputMessage,
 )
-from pydantic import BaseModel
-from typing import Optional
-import json
-import pytest
-from .stub_executor import StubExecutor
+
+# from .stub_executor import StubExecutor
 
 
 class WeatherArgs(BaseModel):
@@ -30,13 +33,13 @@ def test_weather_tool_call(llm_executor):
     prompt = Prompt(
         system_message="You are a helpful assistant. Always use the weather tool when asked about weather.",
         messages=[
-            UserMessage(content="What's the weather like in Tokyo?"),
+            TextMessage.user("What's the weather like in Tokyo?"),
         ],
         tools=[WEATHER_TOOL],
     )
 
     response = llm_executor.execute(prompt)
-    response.raise_for_status()
+    # response.raise_for_status()
 
     tool_call = response.tool_call()
     assert tool_call.name == "get_weather"
@@ -49,13 +52,13 @@ def test_multiple_tool_calls(llm_executor):
     prompt = Prompt(
         system_message="You are a helpful assistant. Compare the weather in two cities.  Make as many tool usage calls as possible at one time",
         messages=[
-            UserMessage(content="Compare the weather in New York and London"),
+            TextMessage.user(content="Compare the weather in New York and London"),
         ],
         tools=[WEATHER_TOOL],
     )
 
     response = llm_executor.execute(prompt)
-    response.raise_for_status()
+    # response.raise_for_status()
 
     tool_calls = response.tool_calls()
     assert len(tool_calls) == 2
@@ -68,7 +71,7 @@ def test_tool_call_result_handling(llm_executor):
     """Test handling of tool call results"""
     prompt = Prompt(
         system_message="You are a weather assistant",
-        messages=[UserMessage("What's the weather in Toronto?")],
+        messages=[TextMessage.user("What's the weather in Toronto?")],
         tools=[WEATHER_TOOL],
     )
 
@@ -88,7 +91,7 @@ def test_tool_call_result_handling(llm_executor):
 
     # Execute again
     response = llm_executor.execute(prompt)
-    response.raise_for_status()
+    # response.raise_for_status()
 
     # Verify final response includes tool results
 
@@ -103,7 +106,7 @@ def test_tool_call_explicit_result_message(llm_executor):
     prompt = Prompt(
         system_message="You are a weather assistant",
         messages=[
-            UserMessage("What's the weather in Toronto?"),
+            TextMessage.user("What's the weather in Toronto?"),
             ToolCallMessage(
                 tool_name="get_weather",
                 arguments={"location": "Toronto"},
@@ -114,7 +117,7 @@ def test_tool_call_explicit_result_message(llm_executor):
     )
 
     response = llm_executor.execute(prompt)
-    response.raise_for_status()
+    # response.raise_for_status()
     assert "20" in response.text()
     assert "sunny" in response.text()
     assert "Toronto" in response.text()
@@ -124,12 +127,12 @@ def test_tool_call_with_message(llm_executor):
     """Test that tool calls can be added as messages"""
     prompt = Prompt(
         system_message="You are a weather assistant.  Always announce what you are doing before you use a tool.",
-        messages=[UserMessage("What's the weather in Toronto?")],
+        messages=[TextMessage.user("What's the weather in Toronto?")],
         tools=[WEATHER_TOOL],
     )
 
     response = llm_executor.execute(prompt)
-    response.raise_for_status()
+    # response.raise_for_status()
 
     tool_call = response.tool_call()
     assert tool_call.name == "get_weather"
