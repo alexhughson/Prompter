@@ -1,4 +1,4 @@
-from prompter.schemas import ImageMessage, Prompt, TextMessage
+from prompter.schemas import Image, Prompt, User
 
 # Test images URLs (we should probably host these somewhere reliable)
 CLOUD_IMAGE = "https://upload.wikimedia.org/wikipedia/commons/thumb/d/d9/Cumulus_humilis_clouds_in_Ukraine.jpg/1920px-Cumulus_humilis_clouds_in_Ukraine.jpg"
@@ -8,10 +8,9 @@ CAT_IMAGE = "https://upload.wikimedia.org/wikipedia/commons/thumb/3/3a/Cat03.jpg
 def test_image_description(llm_executor):
     """Test that the LLM can correctly describe images"""
     prompt = Prompt(
-        system_message="You are a helpful assistant. Describe what you see in the image in one sentence.",
-        messages=[
-            TextMessage.user("What is in this image?"),
-            ImageMessage.user(url=CLOUD_IMAGE),
+        system="You are a helpful assistant. Describe what you see in the image in one sentence.",
+        conversation=[
+            User("What is in this image?", Image.url(CLOUD_IMAGE)),
         ],
     )
 
@@ -25,10 +24,9 @@ def test_image_description(llm_executor):
 def test_image_with_question(llm_executor):
     """Test that the LLM can answer specific questions about images"""
     prompt = Prompt(
-        system_message="You are a helpful assistant.",
-        messages=[
-            ImageMessage.user(url=CAT_IMAGE),
-            TextMessage.user(content="What color is this animal?"),
+        system="You are a helpful assistant.",
+        conversation=[
+            User(Image.url(CAT_IMAGE), "What color is this animal?"),
         ],
     )
 

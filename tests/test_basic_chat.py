@@ -1,15 +1,14 @@
-from prompter.schemas import Prompt, TextMessage
+from prompter.schemas import Prompt, User
 
 
 def test_basic_chat(llm_executor):
     """Test basic chat functionality without any special features"""
     prompt = Prompt(
-        system_message="You are a helpful assistant that always responds with 'YES' or 'NO'.  Respond with no other text than yes or no",
-        messages=[
-            TextMessage.user("Is the sky blue?"),
+        system="You are a helpful assistant that always responds with 'YES' or 'NO'.  Respond with no other text than yes or no",
+        conversation=[
+            User("Is the sky blue?"),
         ],
     )
-
     response = llm_executor.execute(prompt)
     response.raise_for_status()
 

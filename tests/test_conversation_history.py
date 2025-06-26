@@ -1,6 +1,6 @@
 from pydantic import BaseModel
 
-from prompter.schemas import Prompt, TextMessage, Tool, ToolCallMessage
+from prompter.schemas import Assistant, Prompt, Tool, ToolUse, User
 
 
 class WeatherArgs(BaseModel):
@@ -13,16 +13,16 @@ def test_conversation_with_completed_tool_calls(llm_executor):
     weather_tool = Tool(
         name="get_weather",
         description="Get the weather in a given location",
-        argument_schema=WeatherArgs,
+        params=WeatherArgs,
     )
 
     prompt = Prompt(
-        system_message="You are a helpful weather assistant.",
-        messages=[
-            TextMessage.user("What's the weather like in Tokyo?"),
-            TextMessage.assistant("Let me check that for you."),
-            ToolCallMessage(
-                tool_name="get_weather",
+        system="You are a helpful weather assistant.",
+        conversation=[
+            User("What's the weather like in Tokyo?"),
+            Assistant("Let me check that for you."),
+            ToolUse(
+                name="get_weather",
                 arguments={"location": "Tokyo", "units": "celsius"},
                 result={"temperature": 22, "conditions": "sunny"},
             ),
@@ -42,30 +42,28 @@ def test_conversation_with_error_tool_calls(llm_executor):
     weather_tool = Tool(
         name="get_weather",
         description="Get the weather in a given location",
-        argument_schema=WeatherArgs,
+        params=WeatherArgs,
     )
 
     prompt = Prompt(
-        system_message="You are a helpful weather assistant.",
-        messages=[
-            TextMessage.user(
-                content="What's the weather like in Tokyo and InvalidCity?"
-            ),
-            TextMessage.assistant(content="I'll check both locations."),
-            ToolCallMessage(
-                tool_name="get_weather",
+        system="You are a helpful weather assistant.",
+        conversation=[
+            User("What's the weather like in Tokyo and InvalidCity?"),
+            Assistant("I'll check both locations."),
+            ToolUse(
+                name="get_weather",
                 arguments={"location": "Tokyo", "units": "celsius"},
                 result={"temperature": 22, "conditions": "sunny"},
             ),
-            ToolCallMessage(
-                tool_name="get_weather",
+            ToolUse(
+                name="get_weather",
                 arguments={"location": "InvalidCity", "units": "celsius"},
-                result="Location 'InvalidCity' not found",
+                error="Location 'InvalidCity' not found",
             ),
-            TextMessage.assistant(
+            Assistant(
                 content="I found the weather for Tokyo, but InvalidCity isn't a valid location."
             ),
-            TextMessage.user(content="Ok, check London instead of InvalidCity"),
+            User("Ok, check London instead of InvalidCity"),
         ],
         tools=[weather_tool],
     )
@@ -74,5 +72,5 @@ def test_conversation_with_error_tool_calls(llm_executor):
     response.raise_for_status()
 
     # The LLM should make a tool call for London
-    cities = {call.arguments.parse().location.lower() for call in response.tool_calls()}
+    cities = {call.arguments["location"].lower() for call in response.tool_calls()}
     assert "london" in cities

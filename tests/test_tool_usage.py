@@ -1,17 +1,7 @@
-import json
-from typing import Optional
-
-import pytest
 from pydantic import BaseModel
 
-from prompter.schemas import (
-    Prompt,
-    SchemaValidationError,
-    TextMessage,
-    Tool,
-    ToolCallMessage,
-    ToolCallOutputMessage,
-)
+from prompter.schemas import Prompt, Tool, ToolUse, User
+from prompter.tool_belt import ToolBelt
 
 # from .stub_executor import StubExecutor
 
@@ -24,18 +14,20 @@ class WeatherArgs(BaseModel):
 WEATHER_TOOL = Tool(
     name="get_weather",
     description="Get the weather in a given location",
-    argument_schema=WeatherArgs,
+    params=WeatherArgs,
 )
 
 
 def test_weather_tool_call(llm_executor):
     """Test that the LLM correctly formats tool calls"""
+    tool_belt = ToolBelt([WEATHER_TOOL])
+
     prompt = Prompt(
-        system_message="You are a helpful assistant. Always use the weather tool when asked about weather.",
-        messages=[
-            TextMessage.user("What's the weather like in Tokyo?"),
+        system="You are a helpful assistant. Always use the weather tool when asked about weather.",
+        conversation=[
+            User("What's the weather like in Tokyo?"),
         ],
-        tools=[WEATHER_TOOL],
+        tools=tool_belt.tool_list(),
     )
 
     response = llm_executor.execute(prompt)
@@ -43,18 +35,23 @@ def test_weather_tool_call(llm_executor):
 
     tool_call = response.tool_call()
     assert tool_call.name == "get_weather"
-    assert isinstance(tool_call.arguments.parse(), WeatherArgs)
-    assert tool_call.arguments.parse().location.lower() == "tokyo"
+
+    # Parse with ToolBelt
+    parsed = tool_belt.parse_call(tool_call)
+    assert isinstance(parsed, WeatherArgs)
+    assert parsed.location.lower() == "tokyo"
 
 
 def test_multiple_tool_calls(llm_executor):
     """Test handling multiple tool calls in one response"""
+    tool_belt = ToolBelt([WEATHER_TOOL])
+
     prompt = Prompt(
-        system_message="You are a helpful assistant. Compare the weather in two cities.  Make as many tool usage calls as possible at one time",
-        messages=[
-            TextMessage.user(content="Compare the weather in New York and London"),
+        system="You are a helpful assistant. Compare the weather in two cities.  Make as many tool usage calls as possible at one time",
+        conversation=[
+            User("Compare the weather in New York and London"),
         ],
-        tools=[WEATHER_TOOL],
+        tools=tool_belt.tool_list(),
     )
 
     response = llm_executor.execute(prompt)
@@ -63,15 +60,17 @@ def test_multiple_tool_calls(llm_executor):
     tool_calls = response.tool_calls()
     assert len(tool_calls) == 2
 
-    locations = {call.arguments.parse().location.lower() for call in tool_calls}
+    # Parse all calls with ToolBelt
+    parsed_calls = [tool_belt.parse_call(call) for call in tool_calls]
+    locations = {call.location.lower() for call in parsed_calls}
     assert locations == {"new york", "london"}
 
 
 def test_tool_call_result_handling(llm_executor):
     """Test handling of tool call results"""
     prompt = Prompt(
-        system_message="You are a weather assistant",
-        messages=[TextMessage.user("What's the weather in Toronto?")],
+        system="You are a weather assistant",
+        conversation=[User("What's the weather in Toronto?")],
         tools=[WEATHER_TOOL],
     )
 
@@ -81,22 +80,21 @@ def test_tool_call_result_handling(llm_executor):
     tool_call = response.tool_call()
 
     # Verify tool arguments
-    assert tool_call.arguments.valid()
-    args = tool_call.arguments.parse()
-    assert isinstance(args, WeatherArgs)
+    args = WEATHER_TOOL.validate_arguments(tool_call.arguments)
+    assert args["location"].lower() == "toronto"
 
     # Add a mock result
     weather_data = {"temperature": 20, "conditions": "sunny"}
-    prompt.messages.append(tool_call.to_input_message(weather_data))
+    prompt.conversation.append(
+        ToolUse(name=tool_call.name, arguments=tool_call.arguments, result=weather_data)
+    )
 
     # Execute again
     response = llm_executor.execute(prompt)
     # response.raise_for_status()
 
     # Verify final response includes tool results
-
-    # Verify final response includes tool results
-    final_text = response.text(include_tools=True)
+    final_text = response.text()
     assert "20" in final_text
     assert "sunny" in final_text
 
@@ -104,11 +102,11 @@ def test_tool_call_result_handling(llm_executor):
 def test_tool_call_explicit_result_message(llm_executor):
     """Test that tool calls can be added as messages"""
     prompt = Prompt(
-        system_message="You are a weather assistant",
-        messages=[
-            TextMessage.user("What's the weather in Toronto?"),
-            ToolCallMessage(
-                tool_name="get_weather",
+        system="You are a weather assistant",
+        conversation=[
+            User("What's the weather in Toronto?"),
+            ToolUse(
+                name="get_weather",
                 arguments={"location": "Toronto"},
                 result={"temperature": 20, "conditions": "sunny"},
             ),
@@ -125,10 +123,12 @@ def test_tool_call_explicit_result_message(llm_executor):
 
 def test_tool_call_with_message(llm_executor):
     """Test that tool calls can be added as messages"""
+    tool_belt = ToolBelt([WEATHER_TOOL])
+
     prompt = Prompt(
-        system_message="You are a weather assistant.  Always announce what you are doing before you use a tool.",
-        messages=[TextMessage.user("What's the weather in Toronto?")],
-        tools=[WEATHER_TOOL],
+        system="You are a weather assistant.  Always announce what you are doing before you use a tool.",
+        conversation=[User("What's the weather in Toronto?")],
+        tools=tool_belt.tool_list(),
     )
 
     response = llm_executor.execute(prompt)
@@ -136,8 +136,10 @@ def test_tool_call_with_message(llm_executor):
 
     tool_call = response.tool_call()
     assert tool_call.name == "get_weather"
-    assert isinstance(tool_call.arguments.parse(), WeatherArgs)
-    assert tool_call.arguments.parse().location.lower() == "toronto"
+
+    # Parse with ToolBelt
+    parsed = tool_belt.parse_call(tool_call)
+    assert parsed.location.lower() == "toronto"
 
     text_messages = response.text_messages()
     assert len(text_messages) > 0
@@ -184,3 +186,44 @@ def test_tool_call_with_message(llm_executor):
 #     # But parsing to schema should fail
 #     with pytest.raises(SchemaValidationError):
 #         tool_call.arguments.parse()
+
+
+def test_tool_belt_workflow_with_response(llm_executor):
+    """Test complete workflow: ToolBelt -> Prompt -> Response -> Parse"""
+
+    # Create tool belt with multiple tools
+    class SearchArgs(BaseModel):
+        query: str
+        max_results: int = 10
+
+    search_tool = Tool(
+        name="web_search", description="Search the web", params=SearchArgs
+    )
+
+    tool_belt = ToolBelt([WEATHER_TOOL, search_tool])
+
+    prompt = Prompt(
+        system="You are a helpful assistant.",
+        conversation=[
+            User(
+                "What's the weather in Berlin and search for tourist attractions there"
+            )
+        ],
+        tools=tool_belt.tool_list(),
+    )
+
+    response = llm_executor.execute(prompt)
+
+    # Parse all tool calls from response
+    for tool_call in response.tool_calls():
+        parsed = tool_belt.parse_call(tool_call)
+
+        if tool_call.name == "get_weather":
+            assert isinstance(parsed, WeatherArgs)
+            assert "berlin" in parsed.location.lower()
+        elif tool_call.name == "web_search":
+            assert isinstance(parsed, SearchArgs)
+            assert (
+                "tourist" in parsed.query.lower()
+                or "attractions" in parsed.query.lower()
+            )

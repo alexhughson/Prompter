@@ -1,241 +1,259 @@
-import json
-import uuid
-from dataclasses import asdict, dataclass
-from typing import Optional, Type
+from dataclasses import dataclass
+from typing import Any, Optional
 
 import anthropic
-from pydantic import BaseModel
 
 from prompter.image_data import url_to_b64
 from prompter.schemas import (
-    CompletionInfo,
-    ImageMessage,
+    Assistant,
+    Block,
+    Document,
+    Image,
     LLMResponse,
-    Message,
-    OutputMessage,
     Prompt,
-    TextMessage,
-    TextOutputMessage,
-    ThoughtOutputMessage,
+    System,
+    Text,
     Tool,
-    ToolCallMessage,
-    ToolCallOutputMessage,
+    ToolCall,
+    ToolUse,
+    User,
 )
 
 
 @dataclass
-class ClaudeModelParams:
+class AnthropicParams:
     max_tokens: int = 1024
     model: str = "claude-3-5-sonnet-latest"
+    temperature: float = 0.0
 
 
-class ClaudeExecutor:
-    def __init__(
-        self,
-        connector=None,
-        model_params: Optional[ClaudeModelParams] = None,
-    ):
-        if connector is None:
-            self.connector = anthropic.Anthropic()
-        else:
-            self.connector = connector
-        if model_params is None:
-            model_params = ClaudeModelParams()
-        self.model_params = model_params
-
-    def _message_to_message(self, input_message: Message) -> list[dict]:
-        if isinstance(input_message, TextMessage):
-            return [self._textmessage_to_message(input_message)]
-        elif isinstance(input_message, ImageMessage):
-            return [self._imagemessage_to_message(input_message)]
-        elif isinstance(input_message, ToolCallMessage):
-            return self._tool_call_message_to_message(input_message)
-
-    def _textmessage_to_message(self, input_message: TextMessage) -> dict:
+def block_to_anthropic_content(block: Block) -> dict[str, Any] | list[dict[str, Any]]:
+    if isinstance(block, User):
+        return {"role": "user", "content": content_list_to_anthropic(block.content)}
+    elif isinstance(block, Assistant):
         return {
-            "role": input_message.role,
-            "content": [{"type": "text", "text": input_message.content}],
+            "role": "assistant",
+            "content": content_list_to_anthropic(block.content),
         }
-
-    def _imagemessage_to_message(self, input_message: ImageMessage) -> dict:
-        image_data = url_to_b64(input_message.url)
-
+    elif isinstance(block, ToolUse):
+        return tool_use_to_anthropic_messages(block)
+    elif isinstance(block, ToolCall):
         return {
-            "role": input_message.role,
+            "role": "assistant",
             "content": [
                 {
-                    "type": "image",
-                    "source": {
-                        "type": "base64",
-                        "data": image_data.base64_data,
-                        "media_type": image_data.content_type,
-                    },
+                    "type": "tool_use",
+                    "id": block.id,
+                    "name": block.name,
+                    "input": block.arguments,
                 }
             ],
         }
+    elif isinstance(block, System):
+        raise ValueError("System blocks should be handled separately")
+    else:
+        raise ValueError(f"Unknown block type: {type(block)}")
 
-    def _tool_call_message_to_message(
-        self, input_message: ToolCallMessage
-    ) -> list[dict]:
-        ret = []
-        tool_call_id = input_message.tool_call_id or "tooluse_" + str(uuid.uuid4())
-        ret.append(
-            {
-                "role": "assistant",
-                "content": [
-                    {
-                        "type": "tool_use",
-                        "name": input_message.tool_name,
-                        "id": tool_call_id,
-                        "input": input_message.arguments,
-                    }
-                ],
-            }
-        )
 
-        ret.append(
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "tool_result",
-                        "tool_use_id": tool_call_id,
-                        "content": (json.dumps(input_message.result)),
-                    }
-                ],
+def content_list_to_anthropic(content: list) -> list[dict[str, Any]]:
+    result = []
+    for item in content:
+        if isinstance(item, Text):
+            result.append({"type": "text", "text": item.content})
+        elif isinstance(item, str):
+            result.append({"type": "text", "text": item})
+        elif isinstance(item, Image):
+            result.append(image_to_anthropic(item))
+        elif isinstance(item, Document):
+            raise NotImplementedError("Document support not implemented")
+    return result
+
+
+def image_to_anthropic(image: Image) -> dict[str, Any]:
+    if image.source.startswith("data:"):
+        media_type, data = image.source.split(";base64,", 1)
+        media_type = media_type.replace("data:", "")
+        return {
+            "type": "image",
+            "source": {"type": "base64", "media_type": media_type, "data": data},
+        }
+    elif image.source.startswith(("http://", "https://")):
+        image_data = url_to_b64(image.source)
+        return {
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": image_data.content_type,
+                "data": image_data.base64_data,
             },
-        )
-        return ret
+        }
+    else:
+        import base64
+        from pathlib import Path
 
-    def _tools_to_tools(self, input_tools: list[Tool]) -> list[dict]:
-        return [
+        path = Path(image.source)
+        with open(path, "rb") as f:
+            data = base64.b64encode(f.read()).decode("utf-8")
+        return {
+            "type": "image",
+            "source": {"type": "base64", "media_type": image.media_type, "data": data},
+        }
+
+
+def tool_use_to_anthropic_messages(tool_use: ToolUse) -> list[dict[str, Any]]:
+    messages = []
+    messages.append(
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": tool_use.id,
+                    "name": tool_use.name,
+                    "input": tool_use.arguments,
+                }
+            ],
+        }
+    )
+
+    content = []
+    if tool_use.result is not None:
+        import json
+
+        content.append(
             {
-                "name": tool.name,
-                "description": tool.description,
-                "input_schema": tool.get_schema(),
+                "type": "tool_result",
+                "tool_use_id": tool_use.id,
+                "content": (
+                    json.dumps(tool_use.result)
+                    if not isinstance(tool_use.result, str)
+                    else tool_use.result
+                ),
             }
-            for tool in input_tools
-        ]
+        )
+    elif tool_use.error:
+        content.append(
+            {
+                "type": "tool_result",
+                "tool_use_id": tool_use.id,
+                "content": tool_use.error,
+            }
+        )
+
+    if content:
+        messages.append({"role": "user", "content": content})
+
+    return messages
+
+
+def tool_to_anthropic(tool: Tool) -> dict[str, Any]:
+    schema: dict[str, Any] = {}
+    if tool.params:
+        if hasattr(tool.params, "model_json_schema"):
+            schema = tool.params.model_json_schema()
+        elif isinstance(tool.params, dict):
+            schema = tool.params
+        else:
+            schema = {"type": "object", "properties": {}}
+
+    return {"name": tool.name, "description": tool.description, "input_schema": schema}
+
+
+def flatten_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    flattened = []
+    for msg in messages:
+        if isinstance(msg, list):
+            flattened.extend(msg)
+        else:
+            flattened.append(msg)
+    return flattened
+
+
+def merge_consecutive_roles(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if not messages:
+        return []
+
+    merged = []
+    current = messages[0].copy()
+
+    for msg in messages[1:]:
+        if msg["role"] == current["role"]:
+            current["content"].extend(msg["content"])
+        else:
+            merged.append(current)
+            current = msg.copy()
+
+    merged.append(current)
+    return merged
+
+
+def parse_anthropic_response(response, tools: list[Tool]) -> LLMResponse:
+    text_parts = []
+    tool_calls = []
+
+    for content in response.content:
+        if content.type == "text":
+            text_parts.append(content.text)
+        elif content.type == "tool_use":
+            tool_calls.append(
+                ToolCall(name=content.name, arguments=content.input, id=content.id)
+            )
+
+    return LLMResponse(
+        raw_response=response,
+        tools=tools,
+        _text_content=" ".join(text_parts),
+        _tool_calls=tool_calls,
+    )
+
+
+class ClaudeExecutor:
+    def __init__(self, client=None, params: Optional[AnthropicParams] = None):
+        self.client = client or anthropic.Anthropic()
+        self.params = params or AnthropicParams()
 
     def execute(
-        self, prompt: Prompt, model_params: Optional[ClaudeModelParams] = None
+        self, prompt: Prompt, params: Optional[AnthropicParams] = None
     ) -> LLMResponse:
-        if model_params is None:
-            model_params = self.model_params
-        # Flatten the list of lists using list comprehension
-        messages = [
-            output_msg
-            for input_message in prompt.messages
-            for output_msg in self._message_to_message(input_message)
-        ]
-        tools = self._tools_to_tools(prompt.tools) if prompt.tools else []
-        raw_llm_response = self.connector.messages.create(
-            system=prompt.system_message,
-            messages=messages,
-            tools=tools,
-            **asdict(model_params),
-        )
+        params = params or self.params
 
-        response_messages = self._convert_api_response_to_messages(
-            raw_llm_response, prompt.tools
-        )
+        messages = []
+        system_message = None
 
-        response_usage, response_cost = self._get_api_response_meta(raw_llm_response)
-        return LLMResponse(
-            messages=response_messages,
-            cost=response_cost,
-            completion_info=response_usage,
-            response_object=raw_llm_response,
-        )
-
-    def execute_format(self, prompt: Prompt, format: Type[BaseModel]):
-        pass
-
-    def _get_api_response_meta(self, response) -> tuple[CompletionInfo, float]:
-        cost = self._compute_cost(response, self.model_params)
-
-        return (
-            CompletionInfo(
-                prompt_tokens=response.usage.input_tokens,
-                completion_tokens=response.usage.output_tokens,
-                finish_reason=response.stop_reason,
-                refusal=(
-                    response.stop_reason_details
-                    if hasattr(response, "stop_reason_details")
-                    else None
-                ),
-            ),
-            cost,
-        )
-
-    def _compute_cost(self, response, model_params) -> float:
-        pricing = PRICE_TABLE[model_params.model]
-        input_cost = pricing.input_price * response.usage.input_tokens / pricing.per
-        output_cost = pricing.output_price * response.usage.output_tokens / pricing.per
-        return input_cost + output_cost
-
-    def _convert_api_response_to_messages(
-        self, response, tools: Optional[list[Tool]]
-    ) -> list[OutputMessage]:
-        if tools is None:
-            tools = []
-
-        def _schema_from_name(
-            name: str, tools: list[Tool]
-        ) -> Optional[Type[BaseModel]]:
-            for tool in tools:
-                if tool.name == name:
-                    return tool.argument_schema
-            return None
-
-        def _content_message_to_output_message(anthropic_content):
-
-            if anthropic_content.type == "text":
-                return TextOutputMessage(content=anthropic_content.text)
-            elif anthropic_content.type == "tool_use":
-                schema = _schema_from_name(anthropic_content.name, tools)
-                assert schema is not None, f"Tool {anthropic_content.name} not found"
-                return ToolCallOutputMessage(
-                    name=anthropic_content.name,
-                    arguments=anthropic_content.input,
-                    schema=schema,
-                )
-            elif (
-                anthropic_content.type == "thinking"
-                or anthropic_content.type == "redacted_thinking"
-            ):
-                return ThoughtOutputMessage(content=anthropic_content.text)
+        for block in prompt.conversation:
+            if isinstance(block, System):
+                system_message = block.content
             else:
-                raise ValueError(f"Unknown content type: {anthropic_content.type}")
+                msg = block_to_anthropic_content(block)
+                if isinstance(msg, list):
+                    messages.extend(msg)
+                else:
+                    messages.append(msg)
 
-        return [
-            _content_message_to_output_message(anthropic_content)
-            for anthropic_content in response.content
-        ]
+        if prompt.system:
+            system_message = prompt.system
 
+        messages = merge_consecutive_roles(messages)
 
-@dataclass
-class AnthropicPricing:
-    input_price: float
-    output_price: float
-    per: int = 1000000
+        tools = None
+        if prompt.tools:
+            tools = [tool_to_anthropic(tool) for tool in prompt.tools]
 
+        kwargs = {
+            "model": params.model,
+            "max_tokens": params.max_tokens,
+            "messages": messages,
+        }
 
-DEFAULT_CLAUDE_PRICE = AnthropicPricing(
-    input_price=3.0,
-    output_price=15.0,
-)
+        if system_message:
+            kwargs["system"] = system_message
 
-PRICE_TABLE = {
-    "claude-3-5-sonnet-latest": DEFAULT_CLAUDE_PRICE,
-    "claude-3-7-sonnet-20250219": DEFAULT_CLAUDE_PRICE,
-    "claude-3-5-sonnet-20240620": DEFAULT_CLAUDE_PRICE,
-    "claude-3-5-haiku-20241022": AnthropicPricing(
-        input_price=0.8,
-        output_price=3.0,
-    ),
-    "claude-3-haiku-20240307": AnthropicPricing(
-        input_price=0.25,
-        output_price=1.25,
-    ),
-}
+        if tools:
+            kwargs["tools"] = tools
+
+        if hasattr(params, "temperature"):
+            kwargs["temperature"] = params.temperature
+
+        response = self.client.messages.create(**kwargs)  # type: ignore
+
+        return parse_anthropic_response(response, prompt.tools or [])

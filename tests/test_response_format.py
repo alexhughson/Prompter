@@ -3,7 +3,6 @@ from pydantic import BaseModel
 
 from prompter.schemas import Prompt, TextMessage
 
-
 # class Character(BaseModel):
 #     name: str
 #     species: str
