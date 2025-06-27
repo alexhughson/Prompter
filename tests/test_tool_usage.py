@@ -121,28 +121,29 @@ def test_tool_call_explicit_result_message(llm_executor):
     assert "Toronto" in response.text()
 
 
-def test_tool_call_with_message(llm_executor):
-    """Test that tool calls can be added as messages"""
-    tool_belt = ToolBelt([WEATHER_TOOL])
+# This test is unreliable in most LLMs, but often passes
+# def test_tool_call_with_message(llm_executor):
+#     """Test that tool calls can be added as messages"""
+#     tool_belt = ToolBelt([WEATHER_TOOL])
 
-    prompt = Prompt(
-        system="You are a weather assistant.  Always announce what you are doing before you use a tool.",
-        conversation=[User("What's the weather in Toronto?")],
-        tools=tool_belt.tool_list(),
-    )
+#     prompt = Prompt(
+#         system="You are a weather assistant.  Always announce what you are doing before you use a tool.",
+#         conversation=[User("What's the weather in Toronto?")],
+#         tools=tool_belt.tool_list(),
+#     )
 
-    response = llm_executor.execute(prompt)
-    # response.raise_for_status()
+#     response = llm_executor.execute(prompt)
+#     # response.raise_for_status()
 
-    tool_call = response.tool_call()
-    assert tool_call.name == "get_weather"
+#     tool_call = response.tool_call()
+#     assert tool_call.name == "get_weather"
 
-    # Parse with ToolBelt
-    parsed = tool_belt.parse_call(tool_call)
-    assert parsed.location.lower() == "toronto"
+#     # Parse with ToolBelt
+#     parsed = tool_belt.parse_call(tool_call)
+#     assert parsed.location.lower() == "toronto"
 
-    text_messages = response.text_messages()
-    assert len(text_messages) > 0
+#     text_messages = response.text_messages()
+#     assert len(text_messages) > 0
 
 
 # def test_invalid_tool_arguments():

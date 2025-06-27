@@ -5,7 +5,7 @@ from openai import OpenAI
 
 from prompter.anthropic_executor import ClaudeExecutor
 from prompter.openai_executor import OpenAIExecutor
-from prompter.openai_responses_executor import OpenAIResponsesExecutor
+
 
 # from prompter.gemini_executor import GeminiExecutor
 
@@ -47,8 +47,6 @@ def llm_executor(request):
     """Provides an LLM executor for each supported provider"""
     if request.param == "openai":
         return OpenAIExecutor()
-    elif request.param == "openai-responses":
-        return OpenAIResponsesExecutor()
     elif request.param == "anthropic":
         return ClaudeExecutor()
     # elif request.param == "gemini-openai-compat":

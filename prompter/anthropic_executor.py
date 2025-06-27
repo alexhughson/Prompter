@@ -1,4 +1,7 @@
+import base64
+import json
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Optional
 
 import anthropic
@@ -27,191 +30,251 @@ class AnthropicParams:
     temperature: float = 0.0
 
 
-def block_to_anthropic_content(block: Block) -> list[dict[str, Any]]:
-    if isinstance(block, User):
-        return [{"role": "user", "content": content_list_to_anthropic(block.content)}]
-    elif isinstance(block, Assistant):
-        return [
-            {
-                "role": "assistant",
-                "content": content_list_to_anthropic(block.content),
+class ClaudeExecutor:
+    class Converters:
+        @staticmethod
+        def block_to_anthropic_content(block: Block) -> list[dict[str, Any]]:
+            block_converters = {
+                User: ClaudeExecutor.Converters._convert_user_block,
+                Assistant: ClaudeExecutor.Converters._convert_assistant_block,
+                ToolUse: ClaudeExecutor.Converters._convert_tool_use_block,
+                ToolCall: ClaudeExecutor.Converters._convert_tool_call_block,
+                System: ClaudeExecutor.Converters._handle_system_block,
             }
-        ]
-    elif isinstance(block, ToolUse):
-        return tool_use_to_anthropic_messages(block)
-    elif isinstance(block, ToolCall):
-        return [
-            {
+            
+            for block_type, converter in block_converters.items():
+                if isinstance(block, block_type):
+                    return converter(block)
+            
+            raise ValueError(f"Unknown block type: {type(block)}")
+
+        @staticmethod
+        def _convert_user_block(block: User) -> list[dict[str, Any]]:
+            return [
+                {
+                    "role": "user",
+                    "content": ClaudeExecutor.Converters.content_list_to_anthropic(
+                        block.content
+                    ),
+                }
+            ]
+
+        @staticmethod
+        def _convert_assistant_block(block: Assistant) -> list[dict[str, Any]]:
+            return [
+                {
+                    "role": "assistant",
+                    "content": ClaudeExecutor.Converters.content_list_to_anthropic(
+                        block.content
+                    ),
+                }
+            ]
+
+        @staticmethod
+        def _convert_tool_use_block(block: ToolUse) -> list[dict[str, Any]]:
+            tool_use_msg = ClaudeExecutor.Converters._create_tool_use_message(
+                block.id, block.name, block.arguments
+            )
+            messages = [tool_use_msg]
+
+            if block.result is not None or block.error:
+                result_msg = ClaudeExecutor.Converters._create_tool_result_message(
+                    block.id, block.result, block.error
+                )
+                messages.append(result_msg)
+
+            return messages
+
+        @staticmethod
+        def _convert_tool_call_block(block: ToolCall) -> list[dict[str, Any]]:
+            return [ClaudeExecutor.Converters._create_tool_use_message(
+                block.id, block.name, block.arguments
+            )]
+
+        @staticmethod
+        def _handle_system_block(block: System) -> list[dict[str, Any]]:
+            raise ValueError("System blocks should be handled separately")
+
+        @staticmethod
+        def _create_tool_use_message(
+            tool_id: str, name: str, arguments: dict[str, Any]
+        ) -> dict[str, Any]:
+            return {
                 "role": "assistant",
                 "content": [
                     {
                         "type": "tool_use",
-                        "id": block.id,
-                        "name": block.name,
-                        "input": block.arguments,
+                        "id": tool_id,
+                        "name": name,
+                        "input": arguments,
                     }
                 ],
             }
-        ]
-    elif isinstance(block, System):
-        raise ValueError("System blocks should be handled separately")
-    else:
-        raise ValueError(f"Unknown block type: {type(block)}")
 
-
-def content_list_to_anthropic(content: list) -> list[dict[str, Any]]:
-    result = []
-    for item in content:
-        if isinstance(item, Text):
-            result.append({"type": "text", "text": item.content})
-        elif isinstance(item, str):
-            result.append({"type": "text", "text": item})
-        elif isinstance(item, Image):
-            result.append(image_to_anthropic(item))
-        elif isinstance(item, Document):
-            raise NotImplementedError("Document support not implemented")
-    return result
-
-
-def image_to_anthropic(image: Image) -> dict[str, Any]:
-    if image.source.startswith("data:"):
-        media_type, data = image.source.split(";base64,", 1)
-        media_type = media_type.replace("data:", "")
-        return {
-            "type": "image",
-            "source": {"type": "base64", "media_type": media_type, "data": data},
-        }
-    elif image.source.startswith(("http://", "https://")):
-        image_data = url_to_b64(image.source)
-        return {
-            "type": "image",
-            "source": {
-                "type": "base64",
-                "media_type": image_data.content_type,
-                "data": image_data.base64_data,
-            },
-        }
-    else:
-        import base64
-        from pathlib import Path
-
-        path = Path(image.source)
-        with open(path, "rb") as f:
-            data = base64.b64encode(f.read()).decode("utf-8")
-        return {
-            "type": "image",
-            "source": {"type": "base64", "media_type": image.media_type, "data": data},
-        }
-
-
-def tool_use_to_anthropic_messages(tool_use: ToolUse) -> list[dict[str, Any]]:
-    messages = []
-    messages.append(
-        {
-            "role": "assistant",
-            "content": [
-                {
-                    "type": "tool_use",
-                    "id": tool_use.id,
-                    "name": tool_use.name,
-                    "input": tool_use.arguments,
-                }
-            ],
-        }
-    )
-
-    content = []
-    if tool_use.result is not None:
-        import json
-
-        content.append(
-            {
-                "type": "tool_result",
-                "tool_use_id": tool_use.id,
-                "content": (
-                    json.dumps(tool_use.result)
-                    if not isinstance(tool_use.result, str)
-                    else tool_use.result
-                ),
-            }
-        )
-    elif tool_use.error:
-        content.append(
-            {
-                "type": "tool_result",
-                "tool_use_id": tool_use.id,
-                "content": tool_use.error,
-            }
-        )
-
-    if content:
-        messages.append({"role": "user", "content": content})
-
-    return messages
-
-
-def tool_to_anthropic(tool: Tool) -> dict[str, Any]:
-    schema: dict[str, Any] = {}
-    if tool.params:
-        if hasattr(tool.params, "model_json_schema"):
-            schema = tool.params.model_json_schema()
-        elif isinstance(tool.params, dict):
-            schema = tool.params
-        else:
-            schema = {"type": "object", "properties": {}}
-
-    return {"name": tool.name, "description": tool.description, "input_schema": schema}
-
-
-def flatten_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    flattened = []
-    for msg in messages:
-        if isinstance(msg, list):
-            flattened.extend(msg)
-        else:
-            flattened.append(msg)
-    return flattened
-
-
-def merge_consecutive_roles(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    if not messages:
-        return []
-
-    merged = []
-    current = messages[0].copy()
-
-    for msg in messages[1:]:
-        if msg["role"] == current["role"]:
-            current["content"].extend(msg["content"])
-        else:
-            merged.append(current)
-            current = msg.copy()
-
-    merged.append(current)
-    return merged
-
-
-def parse_anthropic_response(response, tools: list[Tool]) -> LLMResponse:
-    text_parts = []
-    tool_calls = []
-
-    for content in response.content:
-        if content.type == "text":
-            text_parts.append(content.text)
-        elif content.type == "tool_use":
-            tool_calls.append(
-                ToolCall(name=content.name, arguments=content.input, id=content.id)
+        @staticmethod
+        def _create_tool_result_message(
+            tool_id: str, result: Any, error: Optional[str]
+        ) -> dict[str, Any]:
+            content = ClaudeExecutor.Converters._format_tool_result_content(
+                tool_id, result, error
             )
+            return {"role": "user", "content": content}
 
-    return LLMResponse(
-        raw_response=response,
-        tools=tools,
-        _text_content=" ".join(text_parts),
-        _tool_calls=tool_calls,
-    )
+        @staticmethod
+        def _format_tool_result_content(
+            tool_id: str, result: Any, error: Optional[str]
+        ) -> list[dict[str, Any]]:
+            if error:
+                return [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": tool_id,
+                        "content": error,
+                    }
+                ]
+            elif result is not None:
+                content = (
+                    json.dumps(result) if not isinstance(result, str) else result
+                )
+                return [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": tool_id,
+                        "content": content,
+                    }
+                ]
+            return []
+
+        @staticmethod
+        def content_list_to_anthropic(content: list) -> list[dict[str, Any]]:
+            content_converters = {
+                Text: lambda item: {"type": "text", "text": item.content},
+                str: lambda item: {"type": "text", "text": item},
+                Image: ClaudeExecutor.Converters._convert_image,
+                Document: lambda item: ClaudeExecutor.Converters._handle_document(),
+            }
+            
+            result = []
+            for item in content:
+                for content_type, converter in content_converters.items():
+                    if isinstance(item, content_type):
+                        result.append(converter(item))
+                        break
+            
+            return result
+
+        @staticmethod
+        def _convert_image(image: Image) -> dict[str, Any]:
+            if image.source.startswith("data:"):
+                return ClaudeExecutor.Converters._convert_data_url_image(image)
+            elif image.source.startswith(("http://", "https://")):
+                return ClaudeExecutor.Converters._convert_url_image(image)
+            else:
+                return ClaudeExecutor.Converters._convert_file_image(image)
+
+        @staticmethod
+        def _convert_data_url_image(image: Image) -> dict[str, Any]:
+            media_type, data = image.source.split(";base64,", 1)
+            media_type = media_type.replace("data:", "")
+            return {
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": media_type,
+                    "data": data,
+                },
+            }
+
+        @staticmethod
+        def _convert_url_image(image: Image) -> dict[str, Any]:
+            image_data = url_to_b64(image.source)
+            return {
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": image_data.content_type,
+                    "data": image_data.base64_data,
+                },
+            }
+
+        @staticmethod
+        def _convert_file_image(image: Image) -> dict[str, Any]:
+            path = Path(image.source)
+            with open(path, "rb") as f:
+                data = base64.b64encode(f.read()).decode("utf-8")
+            return {
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": image.media_type,
+                    "data": data,
+                },
+            }
+
+        @staticmethod
+        def _handle_document() -> None:
+            raise NotImplementedError("Document support not implemented")
+
+        @staticmethod
+        def tool_to_anthropic(tool: Tool) -> dict[str, Any]:
+            schema = ClaudeExecutor.Converters._extract_tool_schema(tool.params)
+            return {
+                "name": tool.name,
+                "description": tool.description,
+                "input_schema": schema,
+            }
+
+        @staticmethod
+        def _extract_tool_schema(params: Any) -> dict[str, Any]:
+            if not params:
+                return {"type": "object", "properties": {}}
+            
+            if hasattr(params, "model_json_schema"):
+                return params.model_json_schema()
+            elif isinstance(params, dict):
+                return params
+            else:
+                return {"type": "object", "properties": {}}
+
+        @staticmethod
+        def merge_consecutive_roles(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+            if not messages:
+                return []
+
+            merged = []
+            current = messages[0].copy()
+
+            for msg in messages[1:]:
+                if msg["role"] == current["role"]:
+                    current["content"].extend(msg["content"])
+                else:
+                    merged.append(current)
+                    current = msg.copy()
+
+            merged.append(current)
+            return merged
 
 
-class ClaudeExecutor:
+    @staticmethod
+    def parse_anthropic_response(response, tools: list[Tool]) -> LLMResponse:
+        text_parts = []
+        tool_calls = []
+
+        for content in response.content:
+            if content.type == "text":
+                text_parts.append(content.text)
+            elif content.type == "tool_use":
+                tool_calls.append(
+                    ToolCall(name=content.name, arguments=content.input, id=content.id)
+                )
+
+        return LLMResponse(
+            raw_response=response,
+            tools=tools,
+            _text_content=" ".join(text_parts),
+            _tool_calls=tool_calls,
+        )
+
     def __init__(self, client=None, params: Optional[AnthropicParams] = None):
         self.client = client or anthropic.Anthropic()
         self.params = params or AnthropicParams()
@@ -221,25 +284,46 @@ class ClaudeExecutor:
     ) -> LLMResponse:
         params = params or self.params
 
-        messages = []
-        system_message = None
+        messages = self._build_messages(prompt)
+        system_message = self._extract_system_message(prompt)
+        tools = self._convert_tools(prompt.tools)
 
+        kwargs = self._build_api_kwargs(params, messages, system_message, tools)
+
+        response = self.client.messages.create(**kwargs)  # type: ignore
+
+        return self.parse_anthropic_response(response, prompt.tools or [])
+
+    def _build_messages(self, prompt: Prompt) -> list[dict[str, Any]]:
+        messages = []
+        for block in prompt.conversation:
+            if not isinstance(block, System):
+                msg = self.Converters.block_to_anthropic_content(block)
+                messages.extend(msg)
+        return self.Converters.merge_consecutive_roles(messages)
+
+    def _extract_system_message(self, prompt: Prompt) -> Optional[str]:
+        if prompt.system:
+            return prompt.system
+        
         for block in prompt.conversation:
             if isinstance(block, System):
-                system_message = block.content
-            else:
-                msg = block_to_anthropic_content(block)
-                messages.extend(msg)
+                return block.content
+        
+        return None
 
-        if prompt.system:
-            system_message = prompt.system
+    def _convert_tools(self, tools: Optional[list[Tool]]) -> Optional[list[dict[str, Any]]]:
+        if not tools:
+            return None
+        return [self.Converters.tool_to_anthropic(tool) for tool in tools]
 
-        messages = merge_consecutive_roles(messages)
-
-        tools = None
-        if prompt.tools:
-            tools = [tool_to_anthropic(tool) for tool in prompt.tools]
-
+    def _build_api_kwargs(
+        self, 
+        params: AnthropicParams, 
+        messages: list[dict[str, Any]], 
+        system_message: Optional[str],
+        tools: Optional[list[dict[str, Any]]]
+    ) -> dict[str, Any]:
         kwargs = {
             "model": params.model,
             "max_tokens": params.max_tokens,
@@ -255,6 +339,12 @@ class ClaudeExecutor:
         if hasattr(params, "temperature"):
             kwargs["temperature"] = params.temperature
 
-        response = self.client.messages.create(**kwargs)  # type: ignore
+        return kwargs
 
-        return parse_anthropic_response(response, prompt.tools or [])
+
+# Compatibility layer for existing code
+block_to_anthropic_content = ClaudeExecutor.Converters.block_to_anthropic_content
+content_list_to_anthropic = ClaudeExecutor.Converters.content_list_to_anthropic
+tool_to_anthropic = ClaudeExecutor.Converters.tool_to_anthropic
+merge_consecutive_roles = ClaudeExecutor.Converters.merge_consecutive_roles
+parse_anthropic_response = ClaudeExecutor.parse_anthropic_response
