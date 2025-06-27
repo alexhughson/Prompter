@@ -4,9 +4,10 @@ import pytest
 from openai import OpenAI
 
 from prompter.anthropic_executor import ClaudeExecutor
+from prompter.openai_executor import OpenAIExecutor
+from prompter.openai_responses_executor import OpenAIResponsesExecutor
 
 # from prompter.gemini_executor import GeminiExecutor
-# from prompter.openai_executor import OpenAIExecutor
 
 # Map provider-model combinations to their model IDs
 MODEL_IDS = {
@@ -33,7 +34,8 @@ MODEL_IDS = {
         # "llama-fireworks",
         # "llama-openrouter",
         # "nova-openrouter",
-        # "openai",
+        "openai",
+        # "openai-responses",
         # "openai-openrouter",
         # "phi-fireworks",
         # "phi-openrouter",
@@ -43,11 +45,12 @@ MODEL_IDS = {
 )
 def llm_executor(request):
     """Provides an LLM executor for each supported provider"""
-    return ClaudeExecutor()
-    # if request.param == "openai":
-    #     return OpenAIExecutor()
-    # elif request.param == "anthropic":
-    #     return AnthropicExecutor()
+    if request.param == "openai":
+        return OpenAIExecutor()
+    elif request.param == "openai-responses":
+        return OpenAIResponsesExecutor()
+    elif request.param == "anthropic":
+        return ClaudeExecutor()
     # elif request.param == "gemini-openai-compat":
     #     client = OpenAI(
     #         base_url="https://generativelanguage.googleapis.com/v1beta/",

@@ -60,9 +60,7 @@ def test_conversation_with_error_tool_calls(llm_executor):
                 arguments={"location": "InvalidCity", "units": "celsius"},
                 error="Location 'InvalidCity' not found",
             ),
-            Assistant(
-                content="I found the weather for Tokyo, but InvalidCity isn't a valid location."
-            ),
+            Assistant("I found the weather for Tokyo, but InvalidCity isn't a valid location."),
             User("Ok, check London instead of InvalidCity"),
         ],
         tools=[weather_tool],

@@ -27,28 +27,32 @@ class AnthropicParams:
     temperature: float = 0.0
 
 
-def block_to_anthropic_content(block: Block) -> dict[str, Any] | list[dict[str, Any]]:
+def block_to_anthropic_content(block: Block) -> list[dict[str, Any]]:
     if isinstance(block, User):
-        return {"role": "user", "content": content_list_to_anthropic(block.content)}
+        return [{"role": "user", "content": content_list_to_anthropic(block.content)}]
     elif isinstance(block, Assistant):
-        return {
-            "role": "assistant",
-            "content": content_list_to_anthropic(block.content),
-        }
+        return [
+            {
+                "role": "assistant",
+                "content": content_list_to_anthropic(block.content),
+            }
+        ]
     elif isinstance(block, ToolUse):
         return tool_use_to_anthropic_messages(block)
     elif isinstance(block, ToolCall):
-        return {
-            "role": "assistant",
-            "content": [
-                {
-                    "type": "tool_use",
-                    "id": block.id,
-                    "name": block.name,
-                    "input": block.arguments,
-                }
-            ],
-        }
+        return [
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": block.id,
+                        "name": block.name,
+                        "input": block.arguments,
+                    }
+                ],
+            }
+        ]
     elif isinstance(block, System):
         raise ValueError("System blocks should be handled separately")
     else:
@@ -225,10 +229,7 @@ class ClaudeExecutor:
                 system_message = block.content
             else:
                 msg = block_to_anthropic_content(block)
-                if isinstance(msg, list):
-                    messages.extend(msg)
-                else:
-                    messages.append(msg)
+                messages.extend(msg)
 
         if prompt.system:
             system_message = prompt.system

@@ -71,7 +71,14 @@ class User:
 @dataclass
 class Assistant:
     content: list[str | Text | Image | Document]
-    # tool_calls: list["ToolCall"] | None = None
+
+    def __init__(self, *content: str | Text | Image | Document):
+        self.content = []
+        for item in content:
+            if isinstance(item, str):
+                self.content.append(Text(item))
+            else:
+                self.content.append(item)
 
 
 @dataclass
@@ -90,10 +97,17 @@ class ToolCall:
             self.id = str(uuid4())
 
 
+# @dataclass
+# class ToolCallResponse:
+#     call: ToolCall
+#     response: Any | None = None
+#     error: str | None = None
+
+
 @dataclass
 class ToolUse:
     name: str
-    arguments: dict[str, Any]
+    arguments: Any
     result: Any | None = None
     error: str | None = None
     id: str | None = None
